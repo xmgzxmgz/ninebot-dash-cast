@@ -172,7 +172,13 @@ final class CastController: ObservableObject {
             try receiver.start()
             self.receiver = receiver
             statusText = "CarPlay 会话已发起 → \(host):5012"
+        } catch let error as CarPlayReceiver.ReceiverError {
+            stop()   // prepare() 已经把心跳跑起来了，失败就别让它空转
+            statusText = "CarPlay 起不来，先用「测试图」验证链路"
+            log("启动失败：\(error.localizedDescription)")
+            log("提示：\(error.hint)")
         } catch {
+            stop()
             statusText = "CarPlay 启动失败：\(error)"
             log("启动失败：\(error)")
         }

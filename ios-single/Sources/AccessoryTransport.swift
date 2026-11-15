@@ -1,5 +1,6 @@
 import Foundation
 import ObjectiveC
+import Darwin
 
 /// 私有 CoreAccessories 的运行时桥。
 ///
@@ -34,8 +35,34 @@ final class AccessoryTransport {
     var onData: ((Data) -> Void)?
     var onLog: ((String) -> Void)?
 
+    /// 上一次初始化失败的原因。日志里要能说清"是没加载到框架，还是没有这个类"。
+    private(set) static var loadDiagnosis = ""
+
+    /// 私有框架默认不会被加载，NSClassFromString 永远找不到类。
+    /// 先把 dylib 拽进进程，再查类——这是 CarWithin 那条路能跑起来的前提。
+    private static func loadPrivateFramework() -> String {
+        let candidates = [
+            "/System/Library/PrivateFrameworks/CoreAccessories.framework/CoreAccessories",
+            "/System/Library/PrivateFrameworks/CoreAccessories.framework/Support/CoreAccessories",
+            "/usr/lib/libAccessoryLoader.dylib",
+        ]
+        var tried: [String] = []
+        for path in candidates {
+            if dlopen(path, RTLD_NOW | RTLD_GLOBAL) != nil {
+                return "dlopen 成功：\((path as NSString).lastPathComponent)"
+            }
+            let reason = dlerror().map { String(cString: $0) } ?? "未知"
+            tried.append("\((path as NSString).lastPathComponent)=\(reason)")
+        }
+        return "dlopen 全失败（\(tried.joined(separator: " / "))）"
+    }
+
     init?() {
-        guard let cls = NSClassFromString("ACCTransportClient") else { return nil }
+        let loaded = AccessoryTransport.loadPrivateFramework()
+        guard let cls = NSClassFromString("ACCTransportClient") else {
+            AccessoryTransport.loadDiagnosis = "找不到 ACCTransportClient；\(loaded)"
+            return nil
+        }
         clientClass = cls
         // 单例一般叫 sharedClient / sharedInstance，两种都试
         if let shared = (cls as AnyObject).perform(NSSelectorFromString("sharedClient"))?.takeUnretainedValue() as? NSObject {
@@ -45,6 +72,7 @@ final class AccessoryTransport {
         } else if let allocated = (cls as? NSObject.Type)?.init() {
             client = allocated
         } else {
+            AccessoryTransport.loadDiagnosis = "ACCTransportClient 在，但拿不到实例（sharedClient/sharedInstance/init 都失败）；\(loaded)"
             return nil
         }
     }

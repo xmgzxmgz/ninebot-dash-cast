@@ -15,8 +15,23 @@ protocol CarPlayReceiving: AnyObject {
 }
 
 final class CarPlayReceiver: CarPlayReceiving {
-    enum ReceiverError: Error {
-        case transportUnavailable
+    enum ReceiverError: Error, LocalizedError {
+        case transportUnavailable(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .transportUnavailable(let why):
+                return "transportUnavailable（私有 CoreAccessories 不可用：\(why)）"
+            }
+        }
+
+        /// 日志里直接说人话，别让人对着一个枚举名猜
+        var hint: String {
+            switch self {
+            case .transportUnavailable:
+                return "CarPlay 这条路要私有框架，自签包大概率拿不到。先用「测试图」验证手机→仪表通不通，别在这卡着。"
+            }
+        }
     }
 
     var onVideoFrame: ((CVPixelBuffer) -> Void)?
@@ -36,7 +51,7 @@ final class CarPlayReceiver: CarPlayReceiving {
 
     func start() throws {
         guard let transport = AccessoryTransport() else {
-            throw ReceiverError.transportUnavailable
+            throw ReceiverError.transportUnavailable(AccessoryTransport.loadDiagnosis)
         }
         self.transport = transport
 

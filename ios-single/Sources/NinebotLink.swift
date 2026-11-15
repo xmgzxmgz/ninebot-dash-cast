@@ -106,13 +106,18 @@ final class UDPSender {
             local.sin_family = sa_family_t(AF_INET)
             local.sin_port = bindLocalPort.bigEndian
             local.sin_addr.s_addr = INADDR_ANY
-            bindRC = withUnsafePointer(to: &local) { ptr in
+            let rc = withUnsafePointer(to: &local) { ptr in
                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
-            if bindRC == 0 {
+            if rc == 0 {
+                bindRC = 0
                 actualPort = UDPSender.localPort(of: sock)
+            } else {
+                // errno 必须紧跟着失败的调用读，中间插任何 syscall 都会把它冲掉。
+                // 之前这里存的是 bind 的返回值（恒为 -1），所以日志里永远只看到 "errno -1"。
+                bindRC = errno
             }
         }
 
