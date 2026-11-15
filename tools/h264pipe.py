@@ -97,8 +97,8 @@ def _read_available(stream, size: int = 65536) -> bytes:
     if fd is not None:
         try:
             return os.read(fd(), size)
-        except (OSError, ValueError):
-            return b""
+        except Exception:  # noqa: BLE001 - BytesIO 等没有 fd，退回普通 read
+            pass
     return stream.read(size)
 
 

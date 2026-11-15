@@ -15,6 +15,7 @@
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | 20 字节私有头逐字段规格、分片规则、心跳/断开包、两个通道 |
 | [`docs/REVERSE-NOTES.md`](docs/REVERSE-NOTES.md) | 逆向方法、Mach-O 符号与指令地址、每条结论的证据位置、复现命令 |
 | [`docs/UNAUTHORIZED.md`](docs/UNAUTHORIZED.md) | AirPlay / CarPlay 为什么不用授权也能用：FairPlay 静态表、dongle 里的 MFi 芯片 |
+| [`docs/CARWITHIN.md`](docs/CARWITHIN.md) | 苹果单机方案：CarWithin 内嵌 MFi 证书+私钥、私有 CoreAccessories、共享流帧格式 |
 | [`tools/protocol.py`](tools/protocol.py) | 纯函数实现：打包、分片、心跳、pong 解析 |
 | [`tools/ninebot_send.py`](tools/ninebot_send.py) | 发送端：测试图 / 图片 / 视频 → H.264 或 JPEG → UDP 5012 |
 | [`tools/ninebot_probe.py`](tools/ninebot_probe.py) | 控制通道探测：发心跳、打印 pong 原文与 RTT、网段扫描 |
@@ -87,7 +88,7 @@ python bridge/stream_bridge.py --host 192.168.1.1 --source demo.mp4 --duration 3
 |---|---|---|
 | iPhone 全屏镜像 | Windows：AirServer / LetsView；或树莓派跑 UxPlay | `--source window:接收端窗口标题` |
 | **真 CarPlay（零硬件）** | 安卓机装 **DiPlay**（软件内完成 MFi 认证），USB 接 iPhone，开 USB 调试 | `--source adb` |
-| 真 CarPlay（另一条） | iPhone 装 **CarWithin**（同机跑 CarPlay）+ 浏览器共享 | `--source window:浏览器` |
+| 真 CarPlay（另一条） | iPhone 装 **CarWithin**（同机跑 CarPlay，内嵌 MFi 证书）+ 浏览器共享 | `--source window:浏览器`（WS 直连见 [docs/CARWITHIN.md](docs/CARWITHIN.md)，实验） |
 | CarPlay（有盒子） | CarPlay dongle + node-carplay | `--source window:node-carplay 窗口` |
 | 电脑桌面 | 什么都不用装 | `--source desktop` |
 
