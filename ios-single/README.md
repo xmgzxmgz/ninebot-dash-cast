@@ -2,15 +2,19 @@
 
 目标：**一台 iPhone 自己接收 CarPlay，并把画面直接推给九号仪表**，不经过电脑、不经过录屏。
 
-当前进度：**M1 + M2/M3 代码全部写完并通过 CI 编译**（170 KB 产物）。M1（测试图）可独立验证；M2/M3 需要真机，日志会把卡点直接打出来。
+当前进度：**M1 + M2/M3 代码全部写完并通过 CI 编译**（0.3，199 KB 产物）。M1（测试图）可独立验证；M2/M3 需要真机，日志会把卡点直接打出来。
+
+> **第一次上手先读 [USAGE.md](USAGE.md)**：车机怎么进接收态、手机怎么连热点、IP 怎么自动探测，以及每种失败现象对应的动作。
 
 ## 目录
 
 ```
 ios-single/
+├── USAGE.md                 # 使用说明（三步流程 + 失败分支）
 ├── project.yml              # xcodegen 工程描述（iOS 16.4+，不签名）
 └── Sources/
     ├── NinebotLink.swift    # 20 字节头 + 1380 分片 + 心跳 + BSD socket UDP
+    ├── NetworkProbe.swift   # 本机 IP 读取 + 一键探测车机（发心跳收 pong）
     ├── FrameEncoder.swift   # VideoToolbox Baseline 编码，AVCC→Annex-B，关键帧带 SPS/PPS
     ├── CastApp.swift        # 控制层 + 测试图 + 极简 SwiftUI 界面
     └── CarPlayReceiver.swift# CarPlay 接收层接口（stub，未实现）

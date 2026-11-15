@@ -23,7 +23,7 @@
 | [`tools/test_protocol.py`](tools/test_protocol.py) | 离线单元测试，逐字节断言头部（不联车也能跑） |
 | [`bridge/stream_bridge.py`](bridge/stream_bridge.py) | 桥接任意画面：桌面 / 窗口 / 区域 / 网络流 → 仪表（AirPlay、CarPlay 都走这里） |
 | [`ios/`](ios/) | NinebotCast 的修正补丁（MIT）与改动后的源文件 |
-| [`ios-single/`](ios-single/) | **单机方案骨架**：iPhone 自接收 CarPlay → 直推仪表（M1 已写，待编译验证） |
+| [`ios-single/`](ios-single/) | **单机方案**：iPhone 自接收 CarPlay → 直推仪表；含 App 内引导与一键探测（[USAGE.md](ios-single/USAGE.md)） |
 
 协议规格来自对 **xmz28/ninebot_pro iOS 1.0.0**（`com.hanlin.ninebotpro`）二进制的静态逆向：该版本符号表未剥离，13,134 个符号，可以直接定位到 `H264Packetizer.packets()` 这类函数并读指令。详见逆向笔记。
 
