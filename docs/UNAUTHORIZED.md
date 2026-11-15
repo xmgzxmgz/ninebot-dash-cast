@@ -69,7 +69,33 @@ iPhone 侧：向配件要 X.509 证书 → 发 20 字节随机挑战 → 验签�
 
 另有一条更极客的路：自己买 MFi 3959 芯片 + MCP2221A 转 I2C，跑完整的 iAP2 栈当成"车机"。技术上成立，但芯片供货只对授权厂开放，个人只能碰拆机件，性价比极低。
 
-**绕不过去的那一环**：iPhone 一定验配件的签名，所以**没有真芯片就没有 CarPlay**（不管主机是谁）。
+### 2.1 2026 年的新变化：认证也被搬进软件了（DiPlay / CarWithin）
+
+上面那段"必须有真芯片"在 2026 年被推翻了——因为有人把**芯片里的证书和私钥导出来、直接烧进程序里**：
+
+> **DiPlay**（Android，公开预览版 0.2.x，GitHub 上万星）：把 MFi 认证证书与私钥集成进 APK，
+> 软件层面完成 iAP2 认证，**不需要任何转接盒**。车机装 APK 即可，支持有线 USB 与无线
+> （Wi-Fi Direct / 同一局域网），触控与方向盘按键可反向控制 iPhone，最高 60fps，手机不用越狱。
+> 要求 Android 7.1+（有线）/ 10+（无线）、能装第三方 APK。
+
+> **CarWithin**（iOS，xmz28，v0.2）：更极端——直接在 **iPhone 上**跑接收端。用私有
+> `CoreAccessories` 接口造一个虚拟配件，让 iOS 自己和自己建立 iAP2 链路，画面回到本机显示，
+> 还能开浏览器共享（WebSocket，H.264/H.265）。等于**零硬件、零第二台设备**。
+
+所以现在的现实是：
+
+| 方案 | 认证载体 | 需要硬件吗 |
+|---|---|---|
+| 合规后装车机 | MFi 认证协处理器芯片 | 要（芯片在主机里） |
+| dongle + 开源主机侧 | MFi 芯片 | 要（芯片在盒子里） |
+| **DiPlay** | 软件里的证书 + 私钥 | **不要** |
+| **CarWithin** | 本机虚拟配件，不跨设备认证 | **不要** |
+
+代价也很实际：这类方案依赖**导出的凭证**，属于灰色地带，Apple 换证书/改校验就可能失效；DiPlay 自己标了"公开预览"，不同车机固件适配差异大；CarWithin 依赖私有接口，iOS 升级即可能挂。
+
+**绕不过去的那一环**（修正版）：iPhone 仍然会验签名——如果走外部配件路线，就必须有真芯片；
+但如果像 DiPlay / CarWithin 这样**把签名能力搬进软件或本机**，就能绕开硬件。
+两条路的区别只是"凭证放在哪"，不是"要不要凭证"。
 
 ---
 
@@ -77,9 +103,11 @@ iPhone 侧：向配件要 X.509 证书 → 发 20 字节随机挑战 → 验签�
 
 | 路线 | 需要什么 | 端到端延迟 | 能不能投到仪表 | 本仓库支持情况 |
 |---|---|---|---|---|
-| AirPlay 接收端 + 窗口捕获 | Windows 装 AirServer/LetsView，或树莓派跑 UxPlay | 150–250ms | ✅ | **已实现**（`bridge/stream_bridge.py --source window:标题`） |
-| CarPlay dongle + node-carplay 窗口 | dongle（¥100–300）+ Node 环境 | 200–300ms | ✅ | **已实现**（同上，抓 Electron 窗口） |
-| CarPlay dongle + 树莓派直出 | dongle + Pi + HDMI 采集卡 | 250–350ms | ⚠️ 多一次采集 | 可用 `--source /dev/video0` 或采集卡地址 |
+| AirPlay 接收端 + 窗口捕获 | Windows 装 AirServer/LetsView，或树莓派跑 UxPlay | 150–250ms | ✅ | **已实现**（`--source window:标题`） |
+| **DiPlay（安卓机）+ adb 抓屏** | 一台安卓机（旧手机即可）+ 数据线 | 150–250ms | ✅ | **已实现**（`--source adb`） |
+| **CarWithin（iPhone 同机）+ 浏览器共享** | 只用一台 iPhone + 一台电脑 | 250–400ms | ✅ | **已实现**（`--source window:浏览器`） |
+| CarPlay dongle + node-carplay 窗口 | dongle（约 100–300 元）+ Node 环境 | 200–300ms | ✅ | **已实现**（`--source window:...`） |
+| CarPlay dongle + 树莓派直出 | dongle + Pi + HDMI 采集卡 | 250–350ms | ⚠️ 多一次采集 | 可用 `--source /dev/video0` |
 | 自己焊 MFi 芯片当车机 | MFi 3959 + 开发板 + iAP2 栈 | — | 理论可行 | 不涉及（工作量过大） |
 | 仪表直收 AirPlay/CarPlay | 仪表内置接收端 | — | ❌ | 仪表没算力、没授权 |
 
@@ -91,7 +119,8 @@ iPhone 侧：向配件要 X.509 证书 → 发 20 字节随机挑战 → 验签�
 
 1. **先验证链路**（不需要任何苹果授权硬件）：`--source desktop` 抓桌面推仪表，能出画面就说明协议对了。
 2. **再上 AirPlay**：Windows 装一个 AirPlay 接收端，iPhone 镜像过去，`--list-windows` 找到窗口标题，`--source window:标题`。
-3. **最后才是 CarPlay**：买 dongle → 跑 node-carplay → 同样抓它的窗口。这一步的钱花在 dongle 上，不在软件上。
+3. **要真 CarPlay 就走 DiPlay**（现在最便宜）：找一台闲置安卓机 → 装 DiPlay APK → 数据线接 iPhone → 开 USB 调试连电脑 → `--source adb`。全程不买任何盒子。
+4. **只有 DiPlay 装不上时**（车机/手机型号不兼容）才考虑买 dongle 跑 node-carplay。
 
 ## 五、风险与边界
 

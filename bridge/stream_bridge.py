@@ -18,6 +18,12 @@ Electron 窗口（node-carplay）、摄像头、RTSP 流、整个桌面……统
     # 抓屏幕一块区域 x,y,w,h
     python stream_bridge.py --host 192.168.1.1 --source region:0,0,1280,720
 
+    # 安卓设备屏幕（DiPlay 跑 CarPlay，用 USB 线连电脑抓屏）
+    python stream_bridge.py --host 192.168.1.1 --source adb
+
+    # 任意能把 H.264 吐到 stdout 的命令
+    python stream_bridge.py --host 192.168.1.1 --source "pipe:<命令>"
+
     # 网络流 / 本地文件
     python stream_bridge.py --host 192.168.1.1 --source rtsp://192.168.1.50:8554/carplay
 
@@ -92,21 +98,57 @@ def _capture_args(source: str, fps: int) -> list[str]:
                 "-offset_x", str(x), "-offset_y", str(y),
                 "-video_size", f"{w}x{h}", "-i", "desktop"]
     if source.startswith(("rtsp://", "rtmp://", "http://", "https://", "tcp://", "udp://")):
-        return ["-fflags", "nobuffer", "-flags", "low_delay", "-analyzeduration", "0",
-                "-i", source]
+        return ["-i", source]
     if Path(source).exists():
         return ["-re", "-stream_loop", "-1", "-i", source]
     sys.exit(f"无法识别的来源：{source}（支持 desktop / window:标题 / region:x,y,w,h / 网络流 / 本地文件）")
 
 
+def _producer(source: str) -> list[str] | None:
+    """需要"先跑一个进程把 H.264 喂给 ffmpeg"的来源。
+
+    - `adb[:序列号]`：安卓设备屏幕录制（DiPlay 之类 CarPlay 接收端跑在安卓上）
+    - `pipe:命令`：任意能往 stdout 吐 H.264 的命令
+    """
+    if source.startswith("adb"):
+        serial = source.split(":", 1)[1].strip() if ":" in source else ""
+        cmd = ["adb"]
+        if serial:
+            cmd += ["-s", serial]
+        # screenrecord 直接输出 H.264，不用先落盘
+        cmd += ["exec-out", "screenrecord", "--output-format=h264",
+                "--bit-rate", "8000000", "--time-limit", "180", "-"]
+        return cmd
+    if source.startswith("pipe:"):
+        # 直接按空白切分后 spawn，不经过 shell（Windows 上避免 cmd.exe 转义地狱）
+        return _split_command(source.split(":", 1)[1])
+    return None
+
+
+def _split_command(text: str) -> list[str]:
+    import shlex
+
+    parts = shlex.split(text, posix=(sys.platform != "win32"))
+    return [p.strip('"') if len(p) > 1 and p[0] == p[-1] == '"' else p for p in parts]
+
+
 def build_command(source: str, width: int, height: int, fps: int,
-                  bitrate: int, gop: int) -> list[str]:
-    return [
-        h264pipe.ffmpeg_path(), "-v", "error", "-nostdin",
-        *_capture_args(source, fps),
+                  bitrate: int, gop: int) -> tuple[list[str], list[str] | None]:
+    """返回 (ffmpeg 命令, 生产者命令或 None)。"""
+    producer = _producer(source)
+    if producer is not None:
+        # 实测：管道喂裸 H.264 时不能再加 -fflags nobuffer / -flags low_delay /
+        # -analyzeduration 0，任何一个都会让解码端探不到帧、输出 0 字节。
+        head = ["-f", "h264", "-i", "-"]
+    else:
+        head = _capture_args(source, fps)
+    ffmpeg = [
+        h264pipe.ffmpeg_path(), "-v", "error",
+        *head,
         "-vf", h264pipe.scale_filter(width, height),
         *h264pipe.encoder_args(width, height, fps, bitrate, gop),
     ]
+    return ffmpeg, producer
 
 
 def main() -> int:
@@ -136,9 +178,12 @@ def main() -> int:
     if preset["codec"] != "h264":
         sys.exit("桥接器只支持 H.264 预设（5in / 7in）")
 
-    cmd = build_command(args.source, preset["width"], preset["height"],
-                        preset["fps"], preset["bitrate"], args.gop)
-    print("[i] ffmpeg 输入：", " ".join(_capture_args(args.source, preset["fps"])))
+    cmd, producer_cmd = build_command(args.source, preset["width"], preset["height"],
+                                      preset["fps"], preset["bitrate"], args.gop)
+    if producer_cmd:
+        print("[i] 采集进程：", " ".join(producer_cmd))
+    else:
+        print("[i] ffmpeg 输入：", " ".join(_capture_args(args.source, preset["fps"])))
     print(f"[i] 输出 {preset['width']}x{preset['height']} {preset['fps']}fps "
           f"{preset['bitrate']}kbps → {args.host}:5012")
 
@@ -146,8 +191,16 @@ def main() -> int:
     sender.start_heartbeat()
 
     stop = threading.Event()
-    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, bufsize=0)
+    producer = None
+    if producer_cmd:
+        producer = subprocess.Popen(producer_cmd, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdin=producer.stdout, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, bufsize=0)
+        producer.stdout.close()
+    else:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, bufsize=0)
     aus: queue.Queue = queue.Queue(maxsize=32)
     threading.Thread(target=h264pipe.split_access_units, args=(proc.stdout, aus, stop),
                      daemon=True, name="splitter").start()
@@ -173,10 +226,12 @@ def main() -> int:
     finally:
         stop.set()
         sender.stop()
-        try:
-            proc.kill()
-        except OSError:
-            pass
+        for handle in (proc, producer):
+            try:
+                if handle:
+                    handle.kill()
+            except OSError:
+                pass
         elapsed = max(1e-6, time.monotonic() - started)
         kbps = sender.sent_bytes * 8 / elapsed / 1000
         print(f"[i] 结束：{sender.sent_frames} 帧 / {sender.sent_packets} 包 / "

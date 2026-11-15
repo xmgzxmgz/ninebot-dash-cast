@@ -76,6 +76,7 @@ python bridge/stream_bridge.py --list-windows                    # 列出可见�
 python bridge/stream_bridge.py --host 192.168.1.1 --source desktop
 python bridge/stream_bridge.py --host 192.168.1.1 --source window:AirServer
 python bridge/stream_bridge.py --host 192.168.1.1 --source region:0,0,1280,720
+python bridge/stream_bridge.py --host 192.168.1.1 --source adb            # 安卓屏幕（DiPlay 真 CarPlay）
 python bridge/stream_bridge.py --host 192.168.1.1 --source rtsp://192.168.1.50:8554/carplay
 python bridge/stream_bridge.py --host 192.168.1.1 --source demo.mp4 --duration 30
 ```
@@ -85,10 +86,12 @@ python bridge/stream_bridge.py --host 192.168.1.1 --source demo.mp4 --duration 3
 | 想看什么 | 装什么 | 抓什么 |
 |---|---|---|
 | iPhone 全屏镜像 | Windows：AirServer / LetsView；或树莓派跑 UxPlay | `--source window:接收端窗口标题` |
-| CarPlay | CarPlay dongle（约 100–300 元）+ node-carplay | `--source window:node-carplay 窗口` |
+| **真 CarPlay（零硬件）** | 安卓机装 **DiPlay**（软件内完成 MFi 认证），USB 接 iPhone，开 USB 调试 | `--source adb` |
+| 真 CarPlay（另一条） | iPhone 装 **CarWithin**（同机跑 CarPlay）+ 浏览器共享 | `--source window:浏览器` |
+| CarPlay（有盒子） | CarPlay dongle + node-carplay | `--source window:node-carplay 窗口` |
 | 电脑桌面 | 什么都不用装 | `--source desktop` |
 
-为什么这条链子不需要苹果授权，见 [docs/UNAUTHORIZED.md](docs/UNAUTHORIZED.md)：AirPlay 靠公开的 FairPlay 静态表解 `ekey`，CarPlay 靠 dongle 里那颗真 MFi 芯片做认证——主机侧两者都不需要授权。桥接器只负责最后一公里：把像素变成仪表认的 20 字节头。
+为什么这条链子不需要苹果授权，见 [docs/UNAUTHORIZED.md](docs/UNAUTHORIZED.md)：AirPlay 靠公开的 FairPlay 静态表解 `ekey`；CarPlay 现在有两条**零硬件**路——DiPlay 把 MFi 证书与私钥打进 APK，用软件完成认证；CarWithin 干脆在 iPhone 上自建虚拟配件。桥接器只负责最后一公里：把像素变成仪表认的 20 字节头。
 
 ## 5. iOS 补丁修了什么
 

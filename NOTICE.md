@@ -20,6 +20,8 @@
 | [OpenXPlay/OpenXPlay](https://github.com/OpenXPlay/OpenXPlay) | CarPlay 转发参考 | 与本项目协议无关，仅说明 8443 那条旁路 |
 | [FDH2/UxPlay](https://github.com/FDH2/UxPlay)、[shairplay](https://github.com/juhovh/shairplay) | AirPlay 镜像接收端的事实标准实现 | 仅文档引用，本仓库**不分发**其代码；涉及 FairPlay 的部分不在本仓库范围内 |
 | [node-carplay](https://github.com/nickn17/node-carplay)、[WirelessCarPlay](https://github.com/signalius/WirelessCarPlay) | CarPlay dongle 主机侧协议参考 | 仅文档引用，本仓库不包含 dongle 协议实现 |
+| [DiPlay](https://github.com/shihabal3amri/DiPlay) | 安卓端 CarPlay 接收端（软件内完成 MFi 认证），本仓库只通过 adb 抓屏间接使用 | 仅文档引用，**不分发**其 APK 与凭证 |
+| [xmz28/CarWithin](https://github.com/xmz28/CarWithin) | iPhone 同机 CarPlay 接收器，同一作者的另一条链路 | 仅文档引用，不分发其 IPA |
 
 ## 商标
 
