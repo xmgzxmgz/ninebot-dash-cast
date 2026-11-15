@@ -1,0 +1,5 @@
+Pillow>=10.0
+# 可选：没装系统 ffmpeg 时用自带静态二进制
+imageio-ffmpeg>=0.5
+# 可选：仅 tools/re 逆向脚本需要
+capstone>=5.0

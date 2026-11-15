@@ -1,0 +1,394 @@
+diff --git a/Sources/CastEngine.swift b/Sources/CastEngine.swift
+index 89f0a7c..5a72f3d 100644
+--- a/Sources/CastEngine.swift
++++ b/Sources/CastEngine.swift
+@@ -39,6 +39,10 @@ final class CastEngine: ObservableObject {
+     private var pingCounter: UInt32 = 0
+     private var pingSentTimes: [UInt32: Int] = [:]
+     private var duplicateKeyframes = true
++    /// 拥塞治理：按 RTT/丢包报告降码率、隔帧，而不是丢帧后补关键帧
++    private var governor = CongestionGovernor(baseBitrate: 2000)
++    /// 静止画面闸门：相册图片按每秒 1 帧刷新即可
++    private var staticGate = StaticFrameGate()
+     /// 选了图片就用图片当画面源，没选就用测试图
+     private var photoImage: UIImage?
+     private var photoBuffer: CVPixelBuffer?
+@@ -76,9 +80,9 @@ final class CastEngine: ObservableObject {
+     /// - Parameter gop: 关键帧间隔（官方 gopSize=10）
+     func start(preset: DashboardPreset,
+                host: String,
+-               duplicateKeyframes: Bool,
+-               packetSize: Int = 1400,
+-               gop: Int = 10,
++               duplicateKeyframes: Bool = false,
++               packetSize: Int = 1380,
++               gop: Int = 20,
+                pingOnly: Bool = false) {
+         guard preset.isImplemented || pingOnly else {
+             statusText = "该预设未实现（JPEG 模式待开发）"
+@@ -102,6 +106,9 @@ final class CastEngine: ObservableObject {
+         encodedFrameIndex = 0
+         pingCounter = 0
+         pingSentTimes = [:]
++        governor = CongestionGovernor(baseBitrate: preset.bitrate)
++        staticGate.refreshFrames = max(1, preset.fps)
++        staticGate.reset()
+         rebuildPhotoBuffer()   // 预设变了，图片要按新尺寸重画
+ 
+         let localIP = LocalAddress.primaryIPv4()
+@@ -240,20 +247,27 @@ final class CastEngine: ObservableObject {
+         if pingSentTimes.count > 16 {
+             pingSentTimes.removeValue(forKey: pingSentTimes.keys.first!)
+         }
+-        // 官方心跳（APP 子类型 5，参数 [0,2]）先发；再发计数变体兜底，两包都无害
+-        controlChannel?.send(RTCP.heartbeat())
+-        controlChannel?.send(RTCP.ping(counter: pingCounter))
++        // 逆向确认的官方心跳（计数器小端写在 [12..15]、byte16 = 2）；
++        // 再附一个九号出行 App 的 [0,2] 变体做对照，两包都无害
++        controlChannel?.send(RTCP.heartbeat(counter: pingCounter))
++        controlChannel?.send(RTCP.appVariant())
+         if pingCounter == 1 {
+-            Diag.log("首个心跳已发出（官方 [0,2] + 计数变体）")
++            Diag.log("首个心跳已发出（计数器变体 + 官方 [0,2] 变体）")
+         }
+     }
+ 
+     private func produceFrame() {
+         autoreleasepool {
+             guard let encoder else { return }
+-            // 有图片就发图片（每帧重复编码同一张），否则发测试图
++            // 拥塞降级：中拥塞以上隔帧发送，先让仪表的解码队列排空
++            if governor.shouldSkipFrame() {
++                frameIndex &+= 1
++                return
++            }
++            // 有图片就发图片（同一张图不必每帧重编码），否则发测试图
+             if let photoBuffer {
+                 frameIndex &+= 1
++                guard staticGate.shouldEncode(frameIndex: frameIndex) else { return }
+                 encoder.encode(photoBuffer,
+                                presentationTime: CMTime(value: frameIndex, timescale: preset.fps))
+                 return
+@@ -307,18 +321,29 @@ final class CastEngine: ObservableObject {
+     }
+ 
+     private func handleControlReceive(_ data: Data) {
+-        if let seq = RTCP.parsePong(data) {
++        if let pong = RTCP.parsePong(data) {
++            // CHANGES: pong 可能是 20 字节（五寸）或 24 字节（七寸），
++            // 原实现硬校验 20，七寸因此一直显示"尚无回应"
++            let seq = pong.counter ?? pingCounter
+             var sentAt: Int? = nil
+             onSendQueue {
+                 sentAt = pingSentTimes.removeValue(forKey: seq)
+             }
++            let nowMs = Int(Date().timeIntervalSince1970 * 1000)
++            let rtt = sentAt.map { nowMs - $0 }
++            // 拥塞治理：RTT 变差时先降码率，不补关键帧
++            let downgraded = governor.sample(rttMs: rtt ?? -1)
+             DispatchQueue.main.async {
+                 self.rtcpPongCount += 1
+-                if let sentAt {
+-                    self.lastRTTMs = Int(Date().timeIntervalSince1970 * 1000) - sentAt
++                if let rtt {
++                    self.lastRTTMs = rtt
++                }
++                if let target = downgraded {
++                    self.encoder?.updateBitrate(target)
++                    self.dashboardReport = "拥塞降档 → \(target / 1000) kbps（等级 \(self.governor.currentLevel)）"
+                 }
+                 if self.rtcpPongCount == 1 {
+-                    Diag.log("收到第一个 pong：仪表在线且认 RTCP")
++                    Diag.log("收到第一个 pong（\(pong.length) 字节）：仪表在线且认 RTCP")
+                 }
+             }
+             return
+@@ -330,6 +355,11 @@ final class CastEngine: ObservableObject {
+                 switch report.subtype {
+                 case 1:
+                     self.dashboardReport = "仪表丢包报告 #\(report.value ?? 0)"
++                    // 丢包是最强拥塞信号：立刻降一档码率，而不是补关键帧
++                    if let target = self.governor.sample(rttMs: self.lastRTTMs, lossReported: true) {
++                        self.encoder?.updateBitrate(target)
++                        self.dashboardReport += " → \(target / 1000) kbps"
++                    }
+                 case 2:
+                     self.dashboardReport = "仪表请求帧率 \(report.value ?? 0) FPS"
+                 case 3:
+diff --git a/Sources/MainView.swift b/Sources/MainView.swift
+index 8287123..7314599 100644
+--- a/Sources/MainView.swift
++++ b/Sources/MainView.swift
+@@ -16,9 +16,9 @@ struct MainView: View {
+     @StateObject private var engine = CastEngine()
+     @State private var presetIndex = 0
+     @State private var host = "192.168.1.13"
+-    @State private var duplicateKeyframes = true
+-    @State private var chunk1400 = true
+-    @State private var gopTen = true
++    @State private var duplicateKeyframes = false
++    @State private var chunk1400 = false
++    @State private var gopTen = false
+     @State private var pingOnly = false
+     @State private var scanning = false
+     @State private var tcpScanning = false
+@@ -131,9 +131,9 @@ struct MainView: View {
+                 }
+ 
+                 Section("投屏（协议已对齐官方 APK 与 iOS 逆向）") {
+-                    Toggle("关键帧重发", isOn: $duplicateKeyframes)
++                    Toggle("关键帧重发（默认关：翻倍占带宽）", isOn: $duplicateKeyframes)
+                     Toggle("分片 1400 字节（关 = 1380，APK 值）", isOn: $chunk1400)
+-                    Toggle("关键帧每 10 帧（官方 gopSize）", isOn: $gopTen)
++                    Toggle("关键帧每 10 帧（关＝每 1 秒）", isOn: $gopTen)
+                     Toggle("只发 ping（不编码，用于排查闪退）", isOn: $pingOnly)
+                     Button {
+                         engine.start(preset: DashboardPreset.all[presetIndex],
+diff --git a/Sources/RTPPacker.swift b/Sources/RTPPacker.swift
+index ea6cb8c..cca5c4c 100644
+--- a/Sources/RTPPacker.swift
++++ b/Sources/RTPPacker.swift
+@@ -1,24 +1,26 @@
+ import Foundation
+ 
+-/// 与 ninebot_pro Android APK 逆向出的仪表协议逐字节一致的 RTP 打包器。
++/// 与 ninebot_pro iOS 1.0.0 逆向出的仪表协议逐字节一致的 RTP 打包器
++/// （本文档已按 docs/PROTOCOL.md 修正，原实现有三处偏差，见 CHANGES 注释）。
+ ///
+ /// 视频 RTP 包结构（共 20 字节头）：
+ /// - [0]      0x90（V=2, X=1 扩展头）
+ /// - [1]      (marker?0x80:0) | 32（payload type 固定 32）
+ /// - [2..3]   序列号 BE16（全局逐包递增）
+-/// - [4..7]   时间戳 BE32（单位：毫秒，帧间隔节奏）
++/// - [4..7]   时间戳 BE32（单位：毫秒）
+ /// - [8..14]  0
+ /// - [15]     1
+-/// - [16]     0
+-/// - [17]     标志：0x10=帧首包 0x08=帧尾包 0x01=关键帧
+-/// - [18..19] BE16(1024 | (时间戳低10位))（帧级标识）
+-/// - 负载：Annex-B 原始字节流按 1380 字节切块（不按 NALU 对齐）
++/// - [16]     0（视频包；心跳包此处为 2）
++/// - [17]     标志：0x10 首片 0x08 末片 0x01 关键帧 0x02 非关键帧
++/// - [18..19] LE16(时间戳低 10 位)（帧级标识，注意是**小端**）
++/// - 负载：Annex-B 原始字节流按 1380 字节切块（不按 NALU 对齐），20+1380=1400
+ struct RTPPacker {
+-    /// 分片大小：官方 iOS 端默认 MTU 1400，APK 逆向看到 1380，两个都要能试
+-    var chunkSize: Int = 1400
++    /// 分片大小：逆向确认 H.264 载荷 1380（20 字节头 + 1380 = 1400 整包）。
++    /// 原实现默认 1400 会让整包变成 1420，部分仪表会直接丢包。
++    var chunkSize: Int = 1380
+     private(set) var sequence: UInt16 = 0
+ 
+-    init(chunkSize: Int = 1400) {
++    init(chunkSize: Int = 1380) {
+         self.chunkSize = chunkSize
+     }
+ 
+@@ -44,10 +46,14 @@ struct RTPPacker {
+             packet[7] = UInt8(timestampMs & 0xFF)
+             // [8..14] 保持 0，[15] = 1，[16] = 0
+             packet[15] = 1
+-            packet[17] = (isFirst ? 0x10 : 0x00) | (isKeyframe ? 0x01 : 0x00) | (isLast ? 0x08 : 0x00)
+-            let frameTag = UInt16(1024 + Int(timestampMs & 1023))
+-            packet[18] = UInt8(frameTag >> 8)
+-            packet[19] = UInt8(frameTag & 0xFF)
++            // CHANGES: 非关键帧原来只写 0x10/0x08，官方实现是非关键帧恒带 0x02
++            packet[17] = (isFirst ? 0x10 : 0x00)
++                | (isKeyframe ? 0x01 : 0x02)
++                | (isLast ? 0x08 : 0x00)
++            // CHANGES: 原来是 BE16(1024 + ts&1023)，逆向确认是 LE16(ts & 0x3FF)
++            let frameTag = UInt16(timestampMs & 0x3FF)
++            packet[18] = UInt8(frameTag & 0xFF)
++            packet[19] = UInt8(frameTag >> 8)
+             packet.replaceSubrange(20..<20 + chunkLen, with: bytes[offset..<offset + chunkLen])
+             packets.append(packet)
+             offset += chunkSize
+@@ -58,42 +64,55 @@ struct RTPPacker {
+ 
+ /// 5013 上的 RTCP 风格控制包
+ enum RTCP {
+-    /// 官方 iOS 心跳：RTCP APP，子类型 5，length=4（20 字节），app data = int32 0, int32 2
+-    /// 依据：九号出行 6.10.9 逆向报告 —— `createStartHeartBeatCommand` = createAppCommandBy:5 withValues:[0,2]
+-    static func heartbeat() -> Data {
++    /// 5013 心跳（20 字节）：85 CC 00 04 + 8 字节 0 + 计数器 LE32 + 02 00 00 00
++    ///
++    /// 逆向自 ninebot_pro iOS 1.0.0 的 `H264Packetizer.heartbeat(counter:)`：
++    /// 常量 `85 CC 00 04 00 00 00 00` 在 __const 里，byte16 = 2，
++    /// 计数器以小端写在 [12..15]。
++    static func heartbeat(counter: UInt32) -> Data {
+         var d = Data(repeating: 0, count: 20)
+         d[0] = 0x85          // V=2 | subtype=5
+         d[1] = 0xCC          // PT=204 (APP)
+         d[3] = 4             // length = 4 words → 20 字节
+-        d[19] = 2            // app data: [0, 2]（int32 大端连续）
++        d[12] = UInt8(counter & 0xFF)
++        d[13] = UInt8((counter >> 8) & 0xFF)
++        d[14] = UInt8((counter >> 16) & 0xFF)
++        d[15] = UInt8((counter >> 24) & 0xFF)
++        d[16] = 2
+         return d
+     }
+ 
+-    /// 20 字节 ping：85 CC 00 04 + 8 个 0 + 序号(LE32) + 02 00 00 00
+-    /// （APK 逆向得到的变体，作为心跳的兼容备份，两个都发）
+-    static func ping(counter: UInt32) -> Data {
++    /// 九号出行官方 App 的 [0,2] 变体（app data 两个 int32 大端），保留做对照实验。
++    /// 与上面的 heartbeat 互不影响，仪表对两者都不报错。
++    static func appVariant() -> Data {
+         var d = Data(repeating: 0, count: 20)
+         d[0] = 0x85
+         d[1] = 0xCC
+         d[3] = 4
+-        d[12] = UInt8(counter & 0xFF)
+-        d[13] = UInt8((counter >> 8) & 0xFF)
+-        d[14] = UInt8((counter >> 16) & 0xFF)
+-        d[15] = UInt8((counter >> 24) & 0xFF)
+-        d[16] = 2
++        d[19] = 2
+         return d
+     }
+ 
+-    /// 校验 pong 并取出序号。
+-    /// 实测仪表回包是 85 CC 00 04 + 00000000 + 00000001 + 00000002 + 00000000，
+-    /// 字段布局和 APK 里的假设不完全一致，所以这里只认「85 CC 00 04 + 长度 20」，
+-    /// 不再逐字节强校验（否则明明有回应却显示"尚无回应"）。
+-    static func parsePong(_ data: Data) -> UInt32? {
++    /// 校验 pong 并取出计数器。
++    ///
++    /// CHANGES: 原实现要求「长度必须等于 20」，七寸仪表回的是 24 字节，
++    /// 于是永远匹配不上、界面一直显示"尚无回应"。现在 20/24 都接受，
++    /// 计数器在 [12..15] 取不到时再试 [20..23]。
++    static func parsePong(_ data: Data) -> (counter: UInt32?, length: Int)? {
+         let b = [UInt8](data)
+-        guard b.count == 20, b[0] == 0x85, b[1] == 0xCC, b[2] == 0, b[3] == 4 else {
++        guard b.count >= 4, b[0] == 0x85, b[1] == 0xCC, b[2] == 0, b[3] == 4 else {
+             return nil
+         }
+-        return UInt32(b[12]) | (UInt32(b[13]) << 8) | (UInt32(b[14]) << 16) | (UInt32(b[15]) << 24)
++        var counter: UInt32?
++        if b.count >= 16 {
++            let value = UInt32(b[12]) | (UInt32(b[13]) << 8) | (UInt32(b[14]) << 16) | (UInt32(b[15]) << 24)
++            if value != 0 { counter = value }
++        }
++        if counter == nil, b.count >= 24 {
++            let value = UInt32(b[20]) | (UInt32(b[21]) << 8) | (UInt32(b[22]) << 16) | (UInt32(b[23]) << 24)
++            if value != 0 { counter = value }
++        }
++        return (counter, b.count)
+     }
+ 
+     /// 仪表主动发来的 RTCP APP 报告（逆向自 NinebotEnhance 文档）：
+diff --git a/Sources/TransportTuning.swift b/Sources/TransportTuning.swift
+new file mode 100644
+index 0000000..53cd860
+--- /dev/null
++++ b/Sources/TransportTuning.swift
+@@ -0,0 +1,108 @@
++import Foundation
++
++/// 拥塞控制：宁可降码率、降帧率，也不要「一丢包就补关键帧」。
++///
++/// 原实现在发送缓冲区满时丢帧后立刻补一个关键帧，而关键帧通常是非关键帧的 5~8 倍大，
++/// 于是拥塞时反而制造更大的瞬时码率，形成「越卡越卡」的雪崩。
++/// 这里改成三步降级：先砍码率，再隔帧，最后才是等仪表自己请求关键帧。
++///
++/// 所有方法内部加锁，可以从任意线程调用（当前的调用点分别在主线程与发送队列上）。
++final class CongestionGovernor {
++    private let lock = NSLock()
++    private let baseBitrate: Int
++    private var level = 0
++    private var lastChange = Date.distantPast
++    private var stableSince = Date()
++    private var skipToggle = false
++
++    /// 每级对应的码率系数：正常 / 轻拥塞 / 中拥塞 / 重拥塞
++    private let ratios: [Double] = [1.0, 0.75, 0.5, 0.35]
++
++    init(baseBitrate: Int) {
++        self.baseBitrate = max(200, baseBitrate)
++    }
++
++    /// 以 RTT 与仪表丢包报告为依据评估拥塞程度。
++    /// - Returns: 码率发生变化时返回新的目标码率（bps），否则 nil。
++    @discardableResult
++    func sample(rttMs: Int, lossReported: Bool = false) -> Int? {
++        lock.lock()
++        defer { lock.unlock() }
++
++        let now = Date()
++        let bad = lossReported || rttMs > 80
++        let good = !lossReported && rttMs > 0 && rttMs < 40
++
++        if bad, now.timeIntervalSince(lastChange) > 2, level < ratios.count - 1 {
++            level += 1
++            lastChange = now
++            stableSince = now
++            return targetBitrateLocked()
++        }
++        if good, level > 0, now.timeIntervalSince(stableSince) > 8 {
++            level -= 1
++            lastChange = now
++            stableSince = now
++            return targetBitrateLocked()
++        }
++        return nil
++    }
++
++    var targetBitrate: Int {
++        lock.lock()
++        defer { lock.unlock() }
++        return targetBitrateLocked()
++    }
++
++    var currentLevel: Int {
++        lock.lock()
++        defer { lock.unlock() }
++        return level
++    }
++
++    /// 中拥塞以上隔帧发送：一帧不发比发一帧糊的好，也能让仪表的解码队列排空。
++    func shouldSkipFrame() -> Bool {
++        lock.lock()
++        defer { lock.unlock() }
++        guard level >= 2 else { return false }
++        skipToggle.toggle()
++        return skipToggle
++    }
++
++    /// 切预设/重启时复位。
++    func reset() {
++        lock.lock()
++        defer { lock.unlock() }
++        level = 0
++        lastChange = .distantPast
++        stableSince = Date()
++        skipToggle = false
++    }
++
++    private func targetBitrateLocked() -> Int {
++        let ratio = ratios[min(level, ratios.count - 1)]
++        return max(200, Int(Double(baseBitrate) * ratio))
++    }
++}
++
++/// 静止画面闸门：同一张图不必每帧重编码。
++///
++/// 仪表收到新帧才刷新，不发帧它就保持画面，所以静态图按「每 N 帧刷一次」即可，
++/// Wi-Fi 占用与仪表解码负载都能降一个数量级。
++struct StaticFrameGate {
++    /// 多少帧刷一次（20fps + 20 → 每秒 1 次）
++    var refreshFrames: Int = 20
++    private var lastEncodedFrame: Int64 = .min
++
++    mutating func shouldEncode(frameIndex: Int64) -> Bool {
++        if lastEncodedFrame == .min || frameIndex - lastEncodedFrame >= Int64(max(1, refreshFrames)) {
++            lastEncodedFrame = frameIndex
++            return true
++        }
++        return false
++    }
++
++    mutating func reset() {
++        lastEncodedFrame = .min
++    }
++}
