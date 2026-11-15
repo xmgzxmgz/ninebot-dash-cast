@@ -2,7 +2,7 @@
 
 目标：**一台 iPhone 自己接收 CarPlay，并把画面直接推给九号仪表**，不经过电脑、不经过录屏。
 
-当前进度：**M1（仪表侧输出）代码写完，未编译、未真机验证**；M2/M3（CarPlay 接收）只有接口与注释。
+当前进度：**M1 已通过 GitHub Actions（macos-latest）编译，产物 `SingleCast-unsigned.ipa`（约 33 KB）已可下载**；尚未真机验证。M2/M3（CarPlay 接收）只有接口与注释。
 
 ## 目录
 
@@ -45,7 +45,7 @@ xcodebuild -project SingleCast.xcodeproj -scheme SingleCast \
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| M1 | 测试图 + 编码 + 仪表协议 + UDP | 代码完成，待编译验证 |
+| M1 | 测试图 + 编码 + 仪表协议 + UDP | ✅ 已编译通过（CI 59s），待真机验证 |
 | M2 | MFi 证书加载 + 虚拟配件 + iAP2 认证 | 未开始（最难） |
 | M3 | RTSP 协商 + 收 H.264 ES | 未开始 |
 | M4 | 解码 → 缩放 → 重编码 → 推仪表 | 未开始（M1 已备好下游） |
