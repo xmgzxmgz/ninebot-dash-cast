@@ -195,15 +195,18 @@ final class AccessoryTransport {
 
         var created: AnyObject?
         for transportType in 0...3 {
-            let candidate = function(client, createSel, UInt32(transportType),
-                                     protocolName as NSString, identifier as NSString,
-                                     handler, uuid, true)
-            let describe = candidate.map { "\(type(of: $0))" } ?? "nil"
-            onLog?("[ACC] createEndpoint transport=\(transportType) → \(describe)")
-            if let candidate {
-                created = candidate
-                break
+            for publish in [true, false] {
+                let candidate = function(client, createSel, UInt32(transportType),
+                                         protocolName as NSString, identifier as NSString,
+                                         handler, uuid, publish)
+                let describe = candidate.map { "\(type(of: $0))" } ?? "nil"
+                onLog?("[ACC] createEndpoint transport=\(transportType) publish=\(publish) → \(describe)")
+                if let candidate {
+                    created = candidate
+                    break
+                }
             }
+            if created != nil { break }
         }
 
         guard let created else {

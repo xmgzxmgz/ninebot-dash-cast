@@ -22,8 +22,8 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: SingleCast
-        CFBundleShortVersionString: "0.6"
-        CFBundleVersion: "6"
+        CFBundleShortVersionString: "0.7"
+        CFBundleVersion: "7"
         UILocalNotificationUsageDescription: 用于后台保活提示
         NSLocalNetworkUsageDescription: 用于向九号仪表发送投屏数据（UDP 5012/5013）
         UIBackgroundModes: [audio]

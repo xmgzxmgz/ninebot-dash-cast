@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import CoreVideo
+import PhotosUI
 
 /// 控制层：两种模式
 /// - 测试图：验证"仪表侧输出"（协议 / 编码 / socket）
@@ -156,6 +157,30 @@ final class CastController: ObservableObject {
         log("测试图开始：彩条 + 移动方块 + 帧号，车机上应当立刻出现画面")
     }
 
+    // MARK: - 模式三：推一张图（相册 / 截图）
+
+    /// 把一张图推到仪表。仪表收到新帧才重绘，所以每秒重发 2 帧就够，
+    /// 静态图没必要按 20fps 烧 Wi-Fi。
+    func startImagePush(image: UIImage, host: String) {
+        guard prepare(host: host) else { return }
+        guard let buffer = ImageFrame.make(image: image, width: width, height: height) else {
+            statusText = "图片转换失败（可能是不支持的格式）"
+            return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "singlecast.image"))
+        timer.schedule(deadline: .now(), repeating: 0.5)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.frameIndex &+= 1
+            self.encoder?.encode(buffer, frameIndex: self.frameIndex)
+        }
+        timer.resume()
+        frameTimer = timer
+        statusText = "图片推送中 → \(host):5012"
+        log("图片推送开始：原图 \(Int(image.size.width))x\(Int(image.size.height))，"
+            + "等比缩放补黑边到 \(width)x\(height)，每秒重发 2 帧")
+    }
+
     // MARK: - 模式二：CarPlay
 
     func startCarPlay(host: String) {
@@ -248,11 +273,49 @@ enum TestPattern {
     }
 }
 
+/// 把 UIImage 画进 CVPixelBuffer：等比缩放 + 居中补黑边，和电脑端 load_image_frame 一个思路。
+enum ImageFrame {
+    static func make(image: UIImage, width: Int, height: Int) -> CVPixelBuffer? {
+        guard let cgImage = image.cgImage else { return nil }
+        var buffer: CVPixelBuffer?
+        let attributes: [String: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+        ]
+        guard CVPixelBufferCreate(kCFAllocatorDefault, width, height,
+                                  kCVPixelFormatType_32BGRA,
+                                  attributes as CFDictionary, &buffer) == kCVReturnSuccess,
+              let pixelBuffer = buffer else { return nil }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer),
+              let context = CGContext(data: base, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+
+        context.setFillColor(UIColor.black.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        let scale = min(CGFloat(width) / CGFloat(cgImage.width),
+                        CGFloat(height) / CGFloat(cgImage.height))
+        let drawWidth = CGFloat(cgImage.width) * scale
+        let drawHeight = CGFloat(cgImage.height) * scale
+        context.draw(cgImage, in: CGRect(x: (CGFloat(width) - drawWidth) / 2,
+                                         y: (CGFloat(height) - drawHeight) / 2,
+                                         width: drawWidth, height: drawHeight))
+        return pixelBuffer
+    }
+}
+
 // MARK: - 界面
 
 struct ContentView: View {
     @StateObject private var controller = CastController()
     @AppStorage("dashboardHost") private var host = "192.168.1.1"
+    @State private var pickedImage: PhotosPickerItem?
 
     var body: some View {
         NavigationStack {
@@ -327,6 +390,23 @@ struct ContentView: View {
                     } label: {
                         Label("推送测试图（先验证通路）", systemImage: "play.rectangle.fill")
                     }
+                    PhotosPicker(selection: $pickedImage, matching: .images) {
+                        Label("推送一张图（相册 / 导航截图）", systemImage: "photo.on.rectangle")
+                    }
+                    .onChange(of: pickedImage) { item in
+                        guard let item else { return }
+                        Task {
+                            if let data = try? await item.loadTransferable(type: Data.self),
+                               let image = UIImage(data: data) {
+                                await MainActor.run {
+                                    controller.startImagePush(image: image, host: host)
+                                }
+                            } else {
+                                await MainActor.run { controller.statusText = "读图失败，换一张试试" }
+                            }
+                            await MainActor.run { pickedImage = nil }
+                        }
+                    }
                     Button {
                         controller.startCarPlay(host: host)
                     } label: {
@@ -340,7 +420,7 @@ struct ContentView: View {
                 } header: {
                     Text("开始")
                 } footer: {
-                    Text("测试图是「验路」用的：车机上出现彩条和帧号，说明协议、编码、网络全对。CarPlay 模式依赖私有接口，属于实验功能。")
+                    Text("测试图是「验路」用的：车机上出现彩条和帧号，说明协议、编码、网络全对。「推送一张图」只用公开 API，导航截图可以直接投上去。CarPlay 模式依赖私有接口，属于实验功能。")
                 }
 
                 Section("运行状态") {
