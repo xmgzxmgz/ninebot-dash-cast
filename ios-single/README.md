@@ -2,7 +2,7 @@
 
 目标：**一台 iPhone 自己接收 CarPlay，并把画面直接推给九号仪表**，不经过电脑、不经过录屏。
 
-当前进度：**M1 已通过 GitHub Actions（macos-latest）编译，产物 `SingleCast-unsigned.ipa`（约 33 KB）已可下载**；尚未真机验证。M2/M3（CarPlay 接收）只有接口与注释。
+当前进度：**M1 + M2/M3 代码全部写完并通过 CI 编译**（170 KB 产物）。M1（测试图）可独立验证；M2/M3 需要真机，日志会把卡点直接打出来。
 
 ## 目录
 
@@ -46,9 +46,9 @@ xcodebuild -project SingleCast.xcodeproj -scheme SingleCast \
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | M1 | 测试图 + 编码 + 仪表协议 + UDP | ✅ 已编译通过（CI 59s），待真机验证 |
-| M2 | MFi 证书加载 + 虚拟配件 + iAP2 认证 | 🟡 身份/签名/SRP/TLV8 已编译通过（见 docs/AUTH.md），虚拟配件与 iAP2 未完成 |
-| M3 | RTSP 协商 + 收 H.264 ES | 未开始 |
-| M4 | 解码 → 缩放 → 重编码 → 推仪表 | 未开始（M1 已备好下游） |
+| M2 | MFi 证书加载 + 虚拟配件 + iAP2 认证 | 🟡 代码完成（`AccessoryTransport` / `IAP2` / `MFiIdentity` / `SRPServer`），待真机验证私有接口权限 |
+| M3 | RTSP 协商 + 收 H.264 ES | 🟡 代码完成（`RTSPClient` / `H264Decoder`），消息 ID 与端口待实机校准 |
+| M4 | 解码 → 缩放 → 重编码 → 推仪表 | 🟡 代码完成（`FrameScaler` + 既有 `FrameEncoder`），未联调 |
 | M5 | 触摸回传、后台保活 | 可选 |
 
 ## 已知风险
