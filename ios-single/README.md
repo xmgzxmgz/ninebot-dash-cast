@@ -46,7 +46,7 @@ xcodebuild -project SingleCast.xcodeproj -scheme SingleCast \
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | M1 | 测试图 + 编码 + 仪表协议 + UDP | ✅ 已编译通过（CI 59s），待真机验证 |
-| M2 | MFi 证书加载 + 虚拟配件 + iAP2 认证 | 未开始（最难） |
+| M2 | MFi 证书加载 + 虚拟配件 + iAP2 认证 | 🟡 身份/签名/SRP/TLV8 已编译通过（见 docs/AUTH.md），虚拟配件与 iAP2 未完成 |
 | M3 | RTSP 协商 + 收 H.264 ES | 未开始 |
 | M4 | 解码 → 缩放 → 重编码 → 推仪表 | 未开始（M1 已备好下游） |
 | M5 | 触摸回传、后台保活 | 可选 |
