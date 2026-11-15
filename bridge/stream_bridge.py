@@ -39,13 +39,14 @@ from __future__ import annotations
 import argparse
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import h264pipe  # noqa: E402
 
@@ -53,8 +54,21 @@ from ninebot_send import PRESETS, Sender  # noqa: E402
 
 
 def list_windows() -> int:
+    if sys.platform == "darwin":
+        ffmpeg = h264pipe.ffmpeg_path()
+        out = subprocess.run(
+            [ffmpeg, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+            capture_output=True, text=True,
+        ).stderr
+        for line in out.splitlines():
+            if "AVFoundation" in line and "]" in line:
+                print(line.split("] ", 1)[-1])
+        print("\nmacOS 用序号抓屏：--source desktop（自动找 Capture screen 0）"
+              "或 --source region:x,y,w,h\n第一次会弹「屏幕录制」授权，允许后需重启终端。")
+        return 0
     if sys.platform != "win32":
-        print("窗口枚举目前只实现 Windows；其他平台请直接用 --source desktop 或网络流")
+        print("窗口枚举只在 Windows 实现；macOS 用 --source desktop / region:x,y,w,h，"
+              "Linux 用 x11grab（源码里 _capture_args 一处改）")
         return 1
     import ctypes
     from ctypes import wintypes
@@ -83,8 +97,49 @@ def list_windows() -> int:
     return 0
 
 
+def _macos_screen_index() -> int:
+    """在 avfoundation 设备列表里找「Capture screen 0」的序号。"""
+    ffmpeg = h264pipe.ffmpeg_path()
+    try:
+        out = subprocess.run(
+            [ffmpeg, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+            capture_output=True, text=True, timeout=20,
+        ).stderr
+    except (OSError, subprocess.SubprocessError):
+        return 1
+    current = None
+    for line in out.splitlines():
+        m = re.search(r"\]\s*\[(\d+)\]\s*(.+)$", line)
+        if not m:
+            continue
+        idx, name = int(m.group(1)), m.group(2).strip()
+        if name.lower().startswith("capture screen"):
+            current = idx
+            break
+        current = idx
+    return current if current is not None else 1
+
+
 def _capture_args(source: str, fps: int) -> list[str]:
-    """把 --source 翻译成 ffmpeg 输入参数。"""
+    """把 --source 翻译成 ffmpeg 输入参数（Windows: gdigrab / macOS: avfoundation）。"""
+    if sys.platform == "darwin":
+        screen = _macos_screen_index()
+        head = ["-f", "avfoundation", "-framerate", str(fps), "-capture_cursor", "0",
+                "-i", f"{screen}:none"]
+        if source == "desktop" or source.startswith("region:"):
+            return head
+        if source.startswith("camera"):
+            # UVC 采集卡 / CarPlay 盒子（UVC 输出）在 macOS 上就是一个摄像头设备
+            index = source.split(":", 1)[1] if ":" in source else "0"
+            return ["-f", "avfoundation", "-framerate", str(fps), "-i", f"{index}:none"]
+        if source.startswith("window:"):
+            sys.exit("macOS 不能按窗口标题抓屏，请用 desktop / region:x,y,w,h / camera:序号")
+        if source.startswith(("rtsp://", "rtmp://", "http://", "https://", "tcp://", "udp://")):
+            return ["-i", source]
+        if Path(source).exists():
+            return ["-re", "-stream_loop", "-1", "-i", source]
+        sys.exit(f"无法识别的来源：{source}")
+
     if source == "desktop":
         return ["-f", "gdigrab", "-framerate", str(fps), "-i", "desktop"]
     if source.startswith("window:"):
@@ -144,10 +199,20 @@ def build_command(source: str, width: int, height: int, fps: int,
         head = ["-f", "h264", "-i", "-"]
     else:
         head = _capture_args(source, fps)
+
+    filters: list[str] = []
+    if sys.platform == "darwin" and source.startswith("region:"):
+        parts = source.split(":", 1)[1].split(",")
+        if len(parts) != 4:
+            sys.exit("region 格式：region:x,y,w,h")
+        x, y, w, h = (int(v) for v in parts)
+        filters.append(f"crop={w}:{h}:{x}:{y}")
+    filters.append(h264pipe.scale_filter(width, height))
+
     ffmpeg = [
         h264pipe.ffmpeg_path(), "-v", "error",
         *head,
-        "-vf", h264pipe.scale_filter(width, height),
+        "-vf", ",".join(filters),
         *h264pipe.encoder_args(width, height, fps, bitrate, gop),
     ]
     return ffmpeg, producer
@@ -157,7 +222,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="视频源 → 九号仪表桥接器")
     ap.add_argument("--list-windows", action="store_true", help="列出可见窗口标题后退出")
     ap.add_argument("--host", help="仪表 IP")
-    ap.add_argument("--source", default="desktop", help="desktop | window:标题 | region:x,y,w,h | 流地址 | 文件")
+    ap.add_argument("--source", default="desktop", help="desktop | camera:序号 | region:x,y,w,h | window:标题(Win) | 流地址 | 文件")
     ap.add_argument("--preset", default="5in", choices=sorted(PRESETS))
     ap.add_argument("--fps", type=int)
     ap.add_argument("--bitrate", type=int)

@@ -117,6 +117,35 @@ python bridge/stream_bridge.py --host 192.168.1.1 --source demo.mp4 --duration 3
 | CarPlay（有盒子） | CarPlay dongle + node-carplay | `--source window:node-carplay 窗口` |
 | 电脑桌面 | 什么都不用装 | `--source desktop` |
 
+### 4.1 CarPlay 盒子（dongle）怎么接到仪表
+
+**dongle 不直接连仪表**：它插在电脑上，电脑负责最后一段。整条链路是
+
+```
+iPhone ──CarPlay──> dongle（内有 MFi 芯片，负责认证）──USB──> 电脑 ──UDP 5012──> 仪表
+```
+
+两条实现路线：
+
+1. **选 UVC 输出的盒子**（能被当成 USB 摄像头的那种，改装圈常见）。插上 Mac 后用
+   `ffmpeg -f avfoundation -list_devices true -i ""` 找到设备号，然后：
+
+   ```bash
+   python bridge/stream_bridge.py --host 192.168.1.1 --source camera:0
+   ```
+
+2. **非 UVC 的盒子**（Carlinkit CPC200 一类）走 [node-carplay](https://github.com/naviso/node-carplay)：
+   它把画面渲染成窗口，再抓那块区域 —— macOS 上没有窗口枚举，用坐标：
+
+   ```bash
+   python tools/screen_cast.py --host 192.168.1.1 --region 100,100,1280,720 --fps 2
+   python bridge/stream_bridge.py --host 192.168.1.1 --source region:100,100,1280,720
+   ```
+
+差别：UVC / node-carplay 拿到的是原始流，能跑 20–30fps；`region` 是抓屏，受截图耗时限制
+大约 2fps，只适合静态导航。分辨率会统一缩到 848×480（或 480×272）再重编码，
+CarPlay 原生 720p 缩放后仍然清楚。
+
 为什么这条链子不需要苹果授权，见 [docs/UNAUTHORIZED.md](docs/UNAUTHORIZED.md)：AirPlay 靠公开的 FairPlay 静态表解 `ekey`；CarPlay 现在有两条**零硬件**路——DiPlay 把 MFi 证书与私钥打进 APK，用软件完成认证；CarWithin 干脆在 iPhone 上自建虚拟配件。桥接器只负责最后一公里：把像素变成仪表认的 20 字节头。
 
 ## 5. iOS 补丁修了什么
