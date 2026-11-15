@@ -1,0 +1,44 @@
+name: build-ios-single
+
+on:
+  push:
+    paths:
+      - "ios-single/**"
+      - ".github/workflows/build-ios-single.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 xcodegen
+        run: brew install xcodegen
+
+      - name: 生成工程
+        working-directory: ios-single
+        run: xcodegen generate
+
+      - name: 归档（不签名）
+        working-directory: ios-single
+        run: |
+          xcodebuild -project SingleCast.xcodeproj -scheme SingleCast \
+            -configuration Release -destination "generic/platform=iOS" \
+            -archivePath build/SingleCast.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: 打包未签名 IPA
+        working-directory: ios-single
+        run: |
+          mkdir -p out/Payload
+          cp -R build/SingleCast.xcarchive/Products/Applications/SingleCast.app out/Payload/
+          cd out && zip -qry SingleCast-unsigned.ipa Payload
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: SingleCast-unsigned-ipa
+          path: ios-single/out/SingleCast-unsigned.ipa
+          if-no-files-found: error
