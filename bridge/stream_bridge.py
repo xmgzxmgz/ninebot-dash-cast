@@ -37,6 +37,7 @@ Windows 上走 gdigrab；macOS / Linux 需要自带 ffmpeg 并换用 avfoundatio
 from __future__ import annotations
 
 import argparse
+import os
 import queue
 import subprocess
 import sys
@@ -112,7 +113,8 @@ def _producer(source: str) -> list[str] | None:
     """
     if source.startswith("adb"):
         serial = source.split(":", 1)[1].strip() if ":" in source else ""
-        cmd = ["adb"]
+        # 允许用 ADB 环境变量指定 adb 路径（没加进 PATH 时很常见）
+        cmd = [os.environ.get("ADB", "adb")]
         if serial:
             cmd += ["-s", serial]
         # screenrecord 直接输出 H.264，不用先落盘
