@@ -54,6 +54,8 @@ final class CarPlayReceiver: CarPlayReceiving {
             throw ReceiverError.transportUnavailable(AccessoryTransport.loadDiagnosis)
         }
         self.transport = transport
+        // 少了这一行，AccessoryTransport 内部所有 [ACC] 日志都会被丢掉
+        transport.onLog = { [weak self] text in self?.onLog?(text) }
 
         let probe = transport.probe()
         onLog?("ACCTransportClient classFound=\(probe.classFound) 方法 \(probe.methodNames.count) 个 "

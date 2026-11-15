@@ -102,6 +102,10 @@ final class CastController: ObservableObject {
         for (name, box) in [("视频", video), ("控制", control)] {
             if let rc = box.bindResult, rc != 0 {
                 log("⚠️ \(name)端口绑定失败（errno \(rc)），源端口为系统随机值")
+                if rc == 48 {
+                    log("      48 = EADDRINUSE：上一次的 socket 还占着。把 App 从后台彻底划掉再打开，"
+                        + "或先点「停止」等 1 秒再开始")
+                }
             } else if box.boundPort != 0 {
                 log("\(name)本地端口 \(box.boundPort) 绑定成功")
             }

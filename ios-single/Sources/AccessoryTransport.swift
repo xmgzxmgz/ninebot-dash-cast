@@ -57,6 +57,8 @@ final class AccessoryTransport {
         let candidates = [
             "/System/Library/PrivateFrameworks/CoreAccessories.framework/CoreAccessories",
             "/System/Library/PrivateFrameworks/CoreAccessories.framework/Support/CoreAccessories",
+            "/System/Library/PrivateFrameworks/AccessoryTransport.framework/AccessoryTransport",
+            "/System/Library/PrivateFrameworks/IAP.framework/IAP",
             "/usr/lib/libAccessoryLoader.dylib",
         ]
         var tried: [String] = []
@@ -68,6 +70,20 @@ final class AccessoryTransport {
             tried.append("\((path as NSString).lastPathComponent)=\(reason)")
         }
         return "dlopen 全失败（\(tried.joined(separator: " / "))）"
+    }
+
+    /// 进程里已经加载的、名字沾边 Accessory / IAP 的镜像，用来判断 ACCTransportIO 到底在哪个框架。
+    private static func loadedAccessoryImages() -> [String] {
+        var found: [String] = []
+        for index in 0..<_dyld_image_count() {
+            guard let cName = _dyld_get_image_name(index) else { continue }
+            let name = String(cString: cName)
+            if name.localizedCaseInsensitiveContains("accessor")
+                || name.localizedCaseInsensitiveContains("IAP.framework") {
+                found.append((name as NSString).lastPathComponent)
+            }
+        }
+        return found
     }
 
     init?() {
@@ -193,26 +209,32 @@ final class AccessoryTransport {
             onLog?("[ACC] 连接建不起来，退回随机 UUID 做对照")
         }
 
+        // 协议名也换几种写法试：固件/系统版本不同，认的字符串不一定一样
+        let protocolNames = [protocolName, "com.apple.carplay.wireless", "carplay"]
         var created: AnyObject?
-        for transportType in 0...3 {
-            for publish in [true, false] {
-                let candidate = function(client, createSel, UInt32(transportType),
-                                         protocolName as NSString, identifier as NSString,
-                                         handler, uuid, publish)
-                let describe = candidate.map { "\(type(of: $0))" } ?? "nil"
-                onLog?("[ACC] createEndpoint transport=\(transportType) publish=\(publish) → \(describe)")
-                if let candidate {
-                    created = candidate
-                    break
+        outer: for proto in protocolNames {
+            for transportType in 0...3 {
+                for publish in [true, false] {
+                    let candidate = function(client, createSel, UInt32(transportType),
+                                             proto as NSString, identifier as NSString,
+                                             handler, uuid, publish)
+                    let describe = candidate.map { "\(type(of: $0))" } ?? "nil"
+                    onLog?("[ACC] createEndpoint proto=\(proto) transport=\(transportType) "
+                           + "publish=\(publish) → \(describe)")
+                    if let candidate {
+                        created = candidate
+                        break outer
+                    }
                 }
             }
-            if created != nil { break }
         }
 
         guard let created else {
+            let images = AccessoryTransport.loadedAccessoryImages()
+            onLog?("[ACC] 已加载的相关镜像：\(images.isEmpty ? "无" : images.joined(separator: ", "))")
             throw TransportError.creationFailed(connectionUUID == nil
                 ? "连接和端点都建不起来，四种 type 全 nil —— 基本可判定为 entitlement 被拒，自签包拿不到访问配件服务的权限"
-                : "连接建起来了但端点被拒，换 transportType 也没用 —— 剩下的岔路是协议名或端点级 entitlement")
+                : "连接建起来了但端点被拒（transportType 0…3 × publish × 三种协议名全试过了）—— 大概率是端点级 entitlement，不是参数问题")
         }
         endpoint = created as? NSObject
         onLog?("虚拟配件端点已创建：\(created)")
