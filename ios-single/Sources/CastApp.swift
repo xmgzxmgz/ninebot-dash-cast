@@ -131,12 +131,12 @@ enum TestPattern {
         context.fill(CGRect(x: x, y: height / 2 - block / 2, width: block, height: block))
 
         let text = "FRAME \(String(format: "%06lld", index))  \(width)x\(height)"
-        let attributes: [NSAttributedString.Key: Any] = [
+        let textAttributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.monospacedDigitSystemFont(ofSize: 28, weight: .semibold),
             .foregroundColor: UIColor.white,
         ]
         UIGraphicsPushContext(context)
-        text.draw(at: CGPoint(x: 16, y: CGFloat(height) / 3 + 16), withAttributes: attributes)
+        text.draw(at: CGPoint(x: 16, y: CGFloat(height) / 3 + 16), withAttributes: textAttributes)
         UIGraphicsPopContext()
 
         return pixelBuffer
