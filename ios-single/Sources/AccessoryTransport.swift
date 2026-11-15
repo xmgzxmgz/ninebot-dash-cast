@@ -1,6 +1,7 @@
 import Foundation
 import ObjectiveC
 import Darwin
+import MachO
 
 /// 私有 CoreAccessories 的运行时桥。
 ///
