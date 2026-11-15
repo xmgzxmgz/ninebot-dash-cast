@@ -96,7 +96,15 @@ final class CastController: ObservableObject {
         }
         self.video = video
         self.control = control
-        log("目标 \(target) 5012/5013，已绑定本地端口")
+        log("目标 \(target)：视频 5012 / 控制 5013")
+        // 绑定结果如实打印：部分车机只认来自 5012 的包，源端口变成随机就白推
+        for (name, box) in [("视频", video), ("控制", control)] {
+            if let rc = box.bindResult, rc != 0 {
+                log("⚠️ \(name)端口绑定失败（errno \(rc)），源端口为系统随机值")
+            } else if box.boundPort != 0 {
+                log("\(name)本地端口 \(box.boundPort) 绑定成功")
+            }
+        }
 
         let encoder = FrameEncoder(configuration: .init(width: width, height: height, fps: fps))
         encoder.onFrame = { [weak self] annexB, keyframe in
@@ -121,6 +129,8 @@ final class CastController: ObservableObject {
         beat.setEventHandler { [weak self] in
             guard let self, let control = self.control else { return }
             self.heartbeatCounter &+= 1
+            // 两个变体一起发：不同固件认的不是同一个（见 docs/PROTOCOL.md 4.1）
+            control.send(NinebotHeartbeat.rtcpApp())
             control.send(NinebotHeartbeat.packet(counter: self.heartbeatCounter))
         }
         beat.resume()

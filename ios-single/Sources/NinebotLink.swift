@@ -62,6 +62,19 @@ enum NinebotHeartbeat {
         bytes[16] = 2
         return Data(bytes)
     }
+
+    /// 官方 RTCP APP 变体：85 CC 00 04 + 全 0 + app data `00 00 00 02`。
+    ///
+    /// ninebot_pro 同时发这一个和上面的计数变体，因为不同固件认的不是同一个。
+    /// 两包都无害，一起发能把"车机不回 pong"的概率压到最低。
+    static func rtcpApp() -> Data {
+        var bytes = [UInt8](repeating: 0, count: 20)
+        bytes[0] = 0x85          // V=2 | subtype=5
+        bytes[1] = 0xCC          // PT=204（APP）
+        bytes[3] = 4             // length = 4 words
+        bytes[19] = 2            // app data [0, 2]
+        return Data(bytes)
+    }
 }
 
 /// BSD socket 的 UDP 发送端（视频 5012 / 控制 5013）。
@@ -70,6 +83,12 @@ final class UDPSender {
     private let target: sockaddr_in
     private let lock = NSLock()
     private var sent = 0
+    /// 绑定结果：`nil` = 没要求绑定；`0` = 成功；其他 = errno。
+    /// 之所以要暴露出来，是因为"绑定失败"时源端口会变成随机的，
+    /// 而部分车机固件只认来自 5012 的包——这种情况必须在日志里说出来，不能假装成功。
+    private(set) var bindResult: Int32?
+    /// 实际绑定的本地端口（getsockname 读回，0 表示系统随机分配）
+    private(set) var boundPort: UInt16 = 0
 
     init?(host: String, port: UInt16, bindLocalPort: UInt16 = 0) {
         // 全部用局部变量操作，最后再赋给存储属性：
@@ -80,15 +99,20 @@ final class UDPSender {
         var one: Int32 = 1
         setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
 
+        var bindRC: Int32?
+        var actualPort: UInt16 = 0
         if bindLocalPort != 0 {
             var local = sockaddr_in()
             local.sin_family = sa_family_t(AF_INET)
             local.sin_port = bindLocalPort.bigEndian
             local.sin_addr.s_addr = INADDR_ANY
-            _ = withUnsafePointer(to: &local) { ptr in
+            bindRC = withUnsafePointer(to: &local) { ptr in
                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
+            }
+            if bindRC == 0 {
+                actualPort = UDPSender.localPort(of: sock)
             }
         }
 
@@ -102,6 +126,21 @@ final class UDPSender {
 
         fd = sock
         target = remote
+        bindResult = bindRC
+        boundPort = actualPort
+    }
+
+    /// 读回实际绑定的本地端口。
+    private static func localPort(of fd: Int32) -> UInt16 {
+        var address = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let rc = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length)
+            }
+        }
+        guard rc == 0 else { return 0 }
+        return UInt16(bigEndian: address.sin_port)
     }
 
     @discardableResult
