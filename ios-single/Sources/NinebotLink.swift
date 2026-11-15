@@ -72,11 +72,13 @@ final class UDPSender {
     private var sent = 0
 
     init?(host: String, port: UInt16, bindLocalPort: UInt16 = 0) {
-        fd = socket(AF_INET, SOCK_DGRAM, 0)
-        guard fd >= 0 else { return nil }
+        // 全部用局部变量操作，最后再赋给存储属性：
+        // 在 init 里让闭包捕获 self 会触发 "captured before all members were initialized"
+        let sock = socket(AF_INET, SOCK_DGRAM, 0)
+        guard sock >= 0 else { return nil }
 
         var one: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
 
         if bindLocalPort != 0 {
             var local = sockaddr_in()
@@ -85,7 +87,7 @@ final class UDPSender {
             local.sin_addr.s_addr = INADDR_ANY
             _ = withUnsafePointer(to: &local) { ptr in
                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
         }
@@ -94,9 +96,11 @@ final class UDPSender {
         remote.sin_family = sa_family_t(AF_INET)
         remote.sin_port = port.bigEndian
         guard inet_pton(AF_INET, host, &remote.sin_addr) == 1 else {
-            close(fd)
+            close(sock)
             return nil
         }
+
+        fd = sock
         target = remote
     }
 
