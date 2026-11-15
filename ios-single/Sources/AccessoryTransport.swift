@@ -124,7 +124,7 @@ final class AccessoryTransport {
                                protocolName as NSString, identifier as NSString,
                                handler, NSUUID().uuidString as NSString, true)
         guard let created else { throw TransportError.creationFailed }
-        endpoint = created
+        endpoint = created as? NSObject
         onLog?("虚拟配件端点已创建：\(created)")
     }
 

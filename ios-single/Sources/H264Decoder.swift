@@ -129,7 +129,9 @@ final class H264Decoder {
                                         sampleBufferOut: &sample) == noErr,
               let sample else { return }
 
-        VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: []) { [weak self] status, _, imageBuffer, _, _ in
+        var infoFlags = VTDecodeInfoFlags()
+        VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [],
+                                          infoFlagsOut: &infoFlags) { [weak self] status, _, imageBuffer, _, _ in
             guard status == noErr, let imageBuffer else { return }
             self?.onFrame?(imageBuffer)
         }
