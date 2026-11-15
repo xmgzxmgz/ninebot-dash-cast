@@ -51,6 +51,29 @@ python tools/ninebot_send.py --host 192.168.1.1 --source video:demo.mp4
 静态图片源默认每秒 2 帧刷新（仪表收到新帧才重绘，没必要按 20fps 重发）。
 `7in` 需要 KCP 封装，本工具**未实现**，只保留给抓包对照。
 
+### 2.1 macOS：推屏幕走 screencapture，别用 avfoundation
+
+`bridge/stream_bridge.py` 在 macOS 上要 `avfoundation`，它依赖私有的屏幕录制授权，
+部分环境连设备都枚举不出来。`tools/screen_cast.py` 换成系统自带的 `screencapture`，
+帧率低（截一张约 0.5s，2fps 够用），但稳定性好得多：
+
+```bash
+python tools/screen_cast.py --host 192.168.1.1 --duration 60        # 全屏 2fps
+python tools/screen_cast.py --host 192.168.1.1 --region 0,0,1280,720  # 只截一块
+```
+
+想少敲几条命令就用一站式入口 `tools/nbcast.py`（体检 → 自动找车 → 等接收态 → 推流 → 出报告）：
+
+```bash
+python tools/nbcast.py --wait 120 --send screen --report cast.md
+python tools/nbcast.py --send image:nav.png --seconds 60
+python tools/nbcast.py --self-test          # 离线自检：协议打包 + 编码器
+python tools/nbcast.py --scan               # 只扫网段找车
+```
+
+排障单独用 `tools/nbcheck.py`：一条命令看清网卡/SSID、去仪表的出口、5012/5013 端口占用、
+5013 心跳是否回 pong。
+
 ## 3. 协议一句话版
 
 ```
