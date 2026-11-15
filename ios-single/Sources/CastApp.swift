@@ -10,6 +10,9 @@ final class CastController: ObservableObject {
     @Published var frames = 0
     @Published var packets = 0
     @Published var logs: [String] = []
+    @Published var localIP: String?
+    @Published var hits: [ProbeHit] = []
+    @Published var probing = false
     let identityStatus: String
 
     private var encoder: FrameEncoder?
@@ -35,6 +38,7 @@ final class CastController: ObservableObject {
         } catch {
             identityStatus = "身份加载失败：\(error)"
         }
+        localIP = NetworkProbe.localIPv4()
     }
 
     private func log(_ text: String) {
@@ -42,6 +46,39 @@ final class CastController: ObservableObject {
             self.logs.append(text)
             if self.logs.count > 200 { self.logs.removeFirst(self.logs.count - 200) }
         }
+    }
+
+    // MARK: - 网络与探测
+
+    func refreshNetwork() {
+        let ip = NetworkProbe.localIPv4()
+        localIP = ip
+        log(ip.map { "本机 IP：\($0)" } ?? "没读到本机 IP，检查 Wi-Fi 是否已连上")
+    }
+
+    func probe() {
+        guard !probing else { return }
+        probing = true
+        hits = []
+        log("开始探测车机地址…")
+        NetworkProbe.scan(timeout: 2.5, log: { [weak self] line in
+            self?.log(line)
+        }, completion: { [weak self] hits, local in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.probing = false
+                self.hits = hits
+                if let local { self.localIP = local }
+                self.statusText = hits.isEmpty
+                    ? "没找到车机（看「遇到问题」）"
+                    : "找到车机：\(hits.map(\.host).joined(separator: "、"))"
+            }
+        })
+    }
+
+    func copyLogs() {
+        UIPasteboard.general.string = logs.joined(separator: "\n")
+        statusText = "日志已复制，可直接粘贴发给我"
     }
 
     // MARK: - 公共装配
@@ -59,6 +96,7 @@ final class CastController: ObservableObject {
         }
         self.video = video
         self.control = control
+        log("目标 \(target) 5012/5013，已绑定本地端口")
 
         let encoder = FrameEncoder(configuration: .init(width: width, height: height, fps: fps))
         encoder.onFrame = { [weak self] annexB, keyframe in
@@ -105,6 +143,7 @@ final class CastController: ObservableObject {
         timer.resume()
         frameTimer = timer
         statusText = "测试图发送中 → \(host):5012"
+        log("测试图开始：彩条 + 移动方块 + 帧号，车机上应当立刻出现画面")
     }
 
     // MARK: - 模式二：CarPlay
@@ -193,29 +232,110 @@ enum TestPattern {
     }
 }
 
+// MARK: - 界面
+
 struct ContentView: View {
     @StateObject private var controller = CastController()
-    @State private var host = "192.168.1.1"
+    @AppStorage("dashboardHost") private var host = "192.168.1.1"
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("仪表") {
-                    TextField("仪表 IP", text: $host)
-                        .keyboardType(.numbersAndPunctuation)
-                    Button("推送测试图") { controller.startTestPattern(host: host) }
-                    Button("启动 CarPlay 接收") { controller.startCarPlay(host: host) }
-                    Button("停止", role: .destructive) { controller.stop() }
+                Section {
+                    StepRow(number: 1, title: "车机进入「投屏接收」",
+                            detail: "在车机屏幕或九号出行里打开投屏/接收入口。没开这一步，发多少包车机都丢。")
+                    StepRow(number: 2, title: "手机连车机热点",
+                            detail: "车机会自己开热点，用系统「设置 → Wi-Fi」连上。提示无互联网时选「保持连接」。")
+                    StepRow(number: 3, title: "确认地址后推测试图",
+                            detail: "点下面「自动探测车机」，找到地址后先推测试图，画面出来再谈 CarPlay。")
+                } header: {
+                    Text("使用顺序")
                 }
-                Section("身份（M2）") {
-                    Text(controller.identityStatus).font(.footnote)
+                .textCase(nil)
+
+                Section {
+                    HStack {
+                        Text("本机 IP")
+                        Spacer()
+                        Text(controller.localIP ?? "未读取")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(controller.localIP == nil ? .secondary : .primary)
+                    }
+                    Text(networkHint)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("重新读取网络信息") { controller.refreshNetwork() }
+                } header: {
+                    Text("第 2 步 · 网络检查")
                 }
-                Section("状态") {
+
+                Section {
+                    HStack {
+                        TextField("车机 IP", text: $host)
+                            .keyboardType(.numbersAndPunctuation)
+                            .font(.system(.body, design: .monospaced))
+                        Button("探测") { controller.probe() }
+                            .buttonStyle(.borderless)
+                            .disabled(controller.probing)
+                    }
+                    if controller.probing {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("正在向 192.168.1.1 / 192.168.169.1 / 本网段网关发心跳…")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                    ForEach(controller.hits) { hit in
+                        Button {
+                            host = hit.host
+                            controller.statusText = "已选用 \(hit.host)"
+                        } label: {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                                Text(hit.host).font(.system(.body, design: .monospaced))
+                                Spacer()
+                                Text("\(hit.rttMs) ms · \(hit.bytes) 字节")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("第 3 步 · 车机地址")
+                } footer: {
+                    Text("「探测」会给候选地址发 20 字节心跳，谁回 85 CC 谁就是车机；点结果可填入。")
+                }
+
+                Section {
+                    Button {
+                        controller.startTestPattern(host: host)
+                    } label: {
+                        Label("推送测试图（先验证通路）", systemImage: "play.rectangle.fill")
+                    }
+                    Button {
+                        controller.startCarPlay(host: host)
+                    } label: {
+                        Label("启动 CarPlay 接收（实验）", systemImage: "car.fill")
+                    }
+                    Button(role: .destructive) {
+                        controller.stop()
+                    } label: {
+                        Label("停止", systemImage: "stop.fill")
+                    }
+                } header: {
+                    Text("开始")
+                } footer: {
+                    Text("测试图是「验路」用的：车机上出现彩条和帧号，说明协议、编码、网络全对。CarPlay 模式依赖私有接口，属于实验功能。")
+                }
+
+                Section("运行状态") {
                     Text(controller.statusText)
                     Text("帧 \(controller.frames) ／ 包 \(controller.packets)")
                         .font(.footnote).foregroundStyle(.secondary)
+                    Text(controller.identityStatus)
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("日志") {
+
+                Section {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(Array(controller.logs.enumerated()), id: \.offset) { _, line in
@@ -223,15 +343,68 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .frame(height: 180)
+                    .frame(height: 160)
+                    Button("复制日志") { controller.copyLogs() }
+                } header: {
+                    Text("日志")
                 }
-                Section("说明") {
-                    Text("测试图能点亮仪表，说明协议对了；CarPlay 模式依赖私有 CoreAccessories，日志会告诉你卡在哪一步。")
-                        .font(.footnote)
+
+                Section {
+                    DisclosureGroup("推了测试图，车机没画面") {
+                        Text("① 车机是否真的进了接收态（退回主界面通常就退出了）；② Wi-Fi 是否连的是车机热点；③ IP 是否对（用「探测」）；④ 九号出行 App 可能占着 5012/5013，先杀掉；⑤ 首次运行要允许「本地网络」权限（设置 → SingleCast → 本地网络）。")
+                            .font(.footnote)
+                    }
+                    DisclosureGroup("帧数在涨，但车机没画面") {
+                        Text("说明编码在跑、包发出去了，问题在地址或网段。把「本机 IP」和日志复制给我，一般能直接看出是哪个环节。")
+                            .font(.footnote)
+                    }
+                    DisclosureGroup("CarPlay 模式报错") {
+                        Text("它会先打印 ACCTransportClient classFound=…。若是 false，说明自签 App 拿不到私有 CarPlay 接口权限，这条路要换方案；把日志复制给我即可判断。")
+                            .font(.footnote)
+                    }
+                    DisclosureGroup("两个按钮有什么区别") {
+                        Text("测试图 = 不碰 CarPlay，直接把画的画面推过去，用来排除「协议/网络」；CarPlay = 真的去接管系统 CarPlay 会话。先跑通前者再点后者，出问题才能分清是谁的问题。")
+                            .font(.footnote)
+                    }
+                } header: {
+                    Text("遇到问题")
                 }
             }
             .navigationTitle("SingleCast")
+            .onAppear { controller.refreshNetwork() }
         }
+    }
+
+    /// 网段判断：车机热点通常是 192.168.1.x / 192.168.169.x。
+    private var networkHint: String {
+        guard let ip = controller.localIP else {
+            return "没读到 IP —— 先按第 2 步连上车机热点"
+        }
+        if ip.hasPrefix("192.168.1.") || ip.hasPrefix("192.168.169.") {
+            return "网段像车机热点 ✅ 可以直接探测"
+        }
+        return "当前是 \(ip)，不像车机热点（车机一般是 192.168.1.x 或 192.168.169.x）"
+    }
+}
+
+struct StepRow: View {
+    let number: Int
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(number)")
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.accentColor))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
