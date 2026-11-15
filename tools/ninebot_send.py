@@ -22,8 +22,6 @@ from __future__ import annotations
 import argparse
 import os
 import queue
-import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -35,7 +33,9 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("缺少 Pillow：pip install -r requirements.txt")
 
+import h264pipe
 import protocol
+from h264pipe import split_access_units
 
 PRESETS = {
     "5in": dict(width=848, height=480, fps=20, bitrate=2000, codec="h264", chunk=1380,
@@ -82,8 +82,7 @@ def video_frames(path: str, width: int, height: int, fps: int):
     """用 ffmpeg 解码成 rgb24 裸流，按帧产出。"""
     ffmpeg = ffmpeg_path()
     cmd = [ffmpeg, "-v", "error", "-re", "-stream_loop", "-1", "-i", path,
-           "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                  f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+           "-vf", h264pipe.scale_filter(width, height),
            "-r", str(fps), "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     frame_bytes = width * height * 3
@@ -98,100 +97,20 @@ def video_frames(path: str, width: int, height: int, fps: int):
 
 
 def ffmpeg_path() -> str:
-    env = os.environ.get("FFMPEG")
-    if env and os.path.exists(env):
-        return env
-    exe = shutil.which("ffmpeg")
-    if exe:
-        return exe
-    try:
-        import imageio_ffmpeg
-
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        sys.exit("需要 ffmpeg：装系统 ffmpeg、设置 FFMPEG 环境变量，或 pip install imageio-ffmpeg")
+    return h264pipe.ffmpeg_path()
 
 
 # --------------------------------------------------------------------------- #
 # H.264 编码（ffmpeg 管道，Annex-B 输出）
 # --------------------------------------------------------------------------- #
-AUD_PATTERNS = (b"\x00\x00\x00\x01\x09", b"\x00\x00\x01\x09")
-_START_CODE = re.compile(rb"\x00\x00\x00\x01|\x00\x00\x01")
-
-
 def spawn_encoder(width: int, height: int, fps: int, bitrate: int, gop: int) -> subprocess.Popen:
-    ffmpeg = ffmpeg_path()
     cmd = [
-        ffmpeg, "-v", "error",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
-        "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
-        "-preset", "veryfast", "-tune", "zerolatency",
-        "-b:v", f"{bitrate}k", "-maxrate", f"{bitrate}k", "-bufsize", f"{bitrate * 2}k",
-        "-g", str(gop),
-        "-x264-params", f"aud=1:repeat-headers=1:keyint={gop}:min-keyint={gop}:scenecut=0",
-        "-f", "h264", "-",
+        h264pipe.ffmpeg_path(), "-v", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}",
+        "-r", str(fps), "-i", "-",
+        *h264pipe.encoder_args(width, height, fps, bitrate, gop),
     ]
-    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, bufsize=0)
-
-
-def split_access_units(stream, out: queue.Queue, stop: threading.Event):
-    """按 AUD 切访问单元；带 5 号 NAL（IDR 切片）即视为关键帧。
-
-    注意：4 字节起始码 `00 00 00 01 09` 里包含 3 字节变体 `00 00 01 09`，
-    两种都要找但不许重复计数，否则会把一个 AUD 切成两个空帧。
-    """
-    buf = bytearray()
-    while not stop.is_set():
-        chunk = stream.read(65536)
-        if not chunk:
-            break
-        buf.extend(chunk)
-        starts = _aud_positions(buf)
-        while len(starts) >= 2:
-            au = bytes(buf[starts[0]:starts[1]])
-            del buf[:starts[1]]
-            starts = _aud_positions(buf)
-            if _has_vcl(au):
-                out.put((au, _has_idr(au)))
-    if buf and not stop.is_set():
-        au = bytes(buf)
-        if _has_vcl(au):
-            out.put((au, _has_idr(au)))
-
-
-def _aud_positions(buf: bytearray) -> list[int]:
-    positions = set()
-    for pat in AUD_PATTERNS:
-        i = buf.find(pat)
-        while i != -1:
-            positions.add(i)
-            i = buf.find(pat, i + 1)
-    ordered = sorted(positions)
-    merged: list[int] = []
-    for pos in ordered:
-        if not merged or pos - merged[-1] > 3:
-            merged.append(pos)
-    return merged
-
-
-def _iter_nals(data: bytes):
-    """遍历 NAL：起始码有 3 字节与 4 字节两种（x264 混用），都要认。"""
-    matches = list(_START_CODE.finditer(data))
-    for idx, match in enumerate(matches):
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(data)
-        if start < end:
-            yield data[start] & 0x1F, data[start:end]
-
-
-def _has_vcl(data: bytes) -> bool:
-    return any(t in (1, 5) for t, _ in _iter_nals(data))
-
-
-def _has_idr(data: bytes) -> bool:
-    return any(t == 5 for t, _ in _iter_nals(data))
-
+    return h264pipe.spawn(cmd, stdin_pipe=True)
 
 # --------------------------------------------------------------------------- #
 # 发送器

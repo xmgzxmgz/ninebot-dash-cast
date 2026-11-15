@@ -18,6 +18,8 @@
 | [Xiaolangs/ninebot-cast-tweak](https://github.com/Xiaolangs/ninebot-cast-tweak) | 九号出行官方 App 的逆向结论 | RTCP APP 子类型 5、HUD 编码参数等交叉验证 |
 | [KaruMono/NinebotEnhance](https://github.com/KaruMono/NinebotEnhance)（fork: tyh3520） | 仪表投屏机制说明 | 「仪表必须先进入接收态」等前提 |
 | [OpenXPlay/OpenXPlay](https://github.com/OpenXPlay/OpenXPlay) | CarPlay 转发参考 | 与本项目协议无关，仅说明 8443 那条旁路 |
+| [FDH2/UxPlay](https://github.com/FDH2/UxPlay)、[shairplay](https://github.com/juhovh/shairplay) | AirPlay 镜像接收端的事实标准实现 | 仅文档引用，本仓库**不分发**其代码；涉及 FairPlay 的部分不在本仓库范围内 |
+| [node-carplay](https://github.com/nickn17/node-carplay)、[WirelessCarPlay](https://github.com/signalius/WirelessCarPlay) | CarPlay dongle 主机侧协议参考 | 仅文档引用，本仓库不包含 dongle 协议实现 |
 
 ## 商标
 
