@@ -16,12 +16,14 @@
 | [`docs/REVERSE-NOTES.md`](docs/REVERSE-NOTES.md) | 逆向方法、Mach-O 符号与指令地址、每条结论的证据位置、复现命令 |
 | [`docs/UNAUTHORIZED.md`](docs/UNAUTHORIZED.md) | AirPlay / CarPlay 为什么不用授权也能用：FairPlay 静态表、dongle 里的 MFi 芯片 |
 | [`docs/CARWITHIN.md`](docs/CARWITHIN.md) | 苹果单机方案：CarWithin 内嵌 MFi 证书+私钥、私有 CoreAccessories、共享流帧格式 |
+| [`docs/CARWITHIN-RE.md`](docs/CARWITHIN-RE.md) | CarWithin 的 76 个类型分层图，以及自研单 App 的 M1–M5 里程碑 |
 | [`tools/protocol.py`](tools/protocol.py) | 纯函数实现：打包、分片、心跳、pong 解析 |
 | [`tools/ninebot_send.py`](tools/ninebot_send.py) | 发送端：测试图 / 图片 / 视频 → H.264 或 JPEG → UDP 5012 |
 | [`tools/ninebot_probe.py`](tools/ninebot_probe.py) | 控制通道探测：发心跳、打印 pong 原文与 RTT、网段扫描 |
 | [`tools/test_protocol.py`](tools/test_protocol.py) | 离线单元测试，逐字节断言头部（不联车也能跑） |
 | [`bridge/stream_bridge.py`](bridge/stream_bridge.py) | 桥接任意画面：桌面 / 窗口 / 区域 / 网络流 → 仪表（AirPlay、CarPlay 都走这里） |
 | [`ios/`](ios/) | NinebotCast 的修正补丁（MIT）与改动后的源文件 |
+| [`ios-single/`](ios-single/) | **单机方案骨架**：iPhone 自接收 CarPlay → 直推仪表（M1 已写，待编译验证） |
 
 协议规格来自对 **xmz28/ninebot_pro iOS 1.0.0**（`com.hanlin.ninebotpro`）二进制的静态逆向：该版本符号表未剥离，13,134 个符号，可以直接定位到 `H264Packetizer.packets()` 这类函数并读指令。详见逆向笔记。
 

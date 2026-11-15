@@ -1,0 +1,29 @@
+name: SingleCast
+options:
+  bundleIdPrefix: local.singlecast
+  deploymentTarget:
+    iOS: "16.4"
+  createIntermediateGroups: true
+
+targets:
+  SingleCast:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: SingleCast
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        UILocalNotificationUsageDescription: 用于后台保活提示
+        NSLocalNetworkUsageDescription: 用于向九号仪表发送投屏数据（UDP 5012/5013）
+        UIBackgroundModes: [audio]
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.singlecast
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGNING_ALLOWED: NO
