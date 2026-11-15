@@ -2,7 +2,7 @@
 
 目标：**一台 iPhone 自己接收 CarPlay，并把画面直接推给九号仪表**，不经过电脑、不经过录屏。
 
-当前进度：**M1 + M2/M3 代码全部写完并通过 CI 编译**（0.3，199 KB 产物）。M1（测试图）可独立验证；M2/M3 需要真机，日志会把卡点直接打出来。
+当前进度：**M1 真机验证通过**（2026-11-15，测试图彩条 + 帧号已在仪表正常显示）。M2 在真机上已能把私有 `CoreAccessories` 加载进进程（`ACCTransportClient` 可见，57 个方法），卡在虚拟配件端点创建，正在区分「参数不对」与「entitlement 被拒」；M3/M4 仍需真机。
 
 > **第一次上手先读 [USAGE.md](USAGE.md)**：车机怎么进接收态、手机怎么连热点、IP 怎么自动探测，以及每种失败现象对应的动作。
 
@@ -49,8 +49,8 @@ xcodebuild -project SingleCast.xcodeproj -scheme SingleCast \
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| M1 | 测试图 + 编码 + 仪表协议 + UDP | ✅ 已编译通过（CI 59s），待真机验证 |
-| M2 | MFi 证书加载 + 虚拟配件 + iAP2 认证 | 🟡 代码完成（`AccessoryTransport` / `IAP2` / `MFiIdentity` / `SRPServer`），待真机验证私有接口权限 |
+| M1 | 测试图 + 编码 + 仪表协议 + UDP | ✅ **真机验证通过**（2026-11-15，彩条 + 帧号正常显示） |
+| M2 | MFi 证书加载 + 虚拟配件 + iAP2 认证 | 🟡 真机会加载到 `ACCTransportClient`（57 个方法），端点创建仍失败，正在区分「参数不对」与「entitlement 被拒」 |
 | M3 | RTSP 协商 + 收 H.264 ES | 🟡 代码完成（`RTSPClient` / `H264Decoder`），消息 ID 与端口待实机校准 |
 | M4 | 解码 → 缩放 → 重编码 → 推仪表 | 🟡 代码完成（`FrameScaler` + 既有 `FrameEncoder`），未联调 |
 | M5 | 触摸回传、后台保活 | 可选 |
@@ -59,5 +59,5 @@ xcodebuild -project SingleCast.xcodeproj -scheme SingleCast \
 
 - `VTCompressionSessionEncodeFrame` 的闭包重载需要 iOS 9+，这里用最新签名，若编译报错按 Xcode 提示换老签名。
 - Swift 6 严格并发可能对 `CastController` 的跨队列访问报错，必要时加 `@MainActor` 或 `nonisolated(unsafe)`。
-- M2 依赖私有 `CoreAccessories`，自签环境能否拿到该 entitlement 需真机实测。
+- M2 依赖私有 `CoreAccessories`。真机已验证：`dlopen` 该框架后能取到 `ACCTransportClient`；但虚拟配件端点创建仍失败，自签环境能否拿到对应 entitlement 待确认。
 - 证书来源见 `docs/CARWITHIN-RE.md` 第 4 节，自用测试与再分发是两件事。
