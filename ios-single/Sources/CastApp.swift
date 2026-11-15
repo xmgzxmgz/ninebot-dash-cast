@@ -179,8 +179,8 @@ final class CastController: ObservableObject {
             log("提示：\(error.hint)")
         } catch {
             stop()
-            statusText = "CarPlay 启动失败：\(error)"
-            log("启动失败：\(error)")
+            statusText = "CarPlay 启动失败：\(error.localizedDescription)"
+            log("启动失败：\(error.localizedDescription)")
         }
     }
 

@@ -106,18 +106,33 @@ final class UDPSender {
             local.sin_family = sa_family_t(AF_INET)
             local.sin_port = bindLocalPort.bigEndian
             local.sin_addr.s_addr = INADDR_ANY
-            let rc = withUnsafePointer(to: &local) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+
+            // 上一次会话的 socket 可能还没释放（后台切前台、定时器里还捏着引用），
+            // 这时 bind 会拿到 EADDRINUSE(48)。退避重试几次，别把源端口白白让给系统。
+            var attempt = 0
+            var rc: Int32 = -1
+            var lastErrno: Int32 = 0
+            repeat {
+                rc = withUnsafePointer(to: &local) { ptr in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
                 }
-            }
+                if rc == 0 { break }
+                lastErrno = errno          // 紧跟着失败的调用读，中间不能再插 syscall
+                attempt += 1
+                if lastErrno == EADDRINUSE && attempt < 4 {
+                    usleep(150_000)
+                } else {
+                    break
+                }
+            } while attempt < 4
+
             if rc == 0 {
                 bindRC = 0
                 actualPort = UDPSender.localPort(of: sock)
             } else {
-                // errno 必须紧跟着失败的调用读，中间插任何 syscall 都会把它冲掉。
-                // 之前这里存的是 bind 的返回值（恒为 -1），所以日志里永远只看到 "errno -1"。
-                bindRC = errno
+                bindRC = lastErrno
             }
         }
 

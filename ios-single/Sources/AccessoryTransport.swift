@@ -14,11 +14,24 @@ import Darwin
 /// 我们不静态链接这个框架（也链不到），全部走 ObjC 运行时；`probe()` 会把
 /// "类在不在、有哪些方法"打印到日志里——**这是这条路线能不能走通的第一手证据**。
 final class AccessoryTransport {
-    enum TransportError: Error {
+    enum TransportError: Error, LocalizedError {
         case classMissing(String)
         case selectorMissing(String)
-        case creationFailed
+        case creationFailed(String)
         case notConnected
+
+        var errorDescription: String? {
+            switch self {
+            case .classMissing(let name):
+                return "找不到类 \(name)"
+            case .selectorMissing(let name):
+                return "找不到方法 \(name)"
+            case .creationFailed(let why):
+                return "creationFailed（\(why)）"
+            case .notConnected:
+                return "端点还没连上"
+            }
+        }
     }
 
     struct Probe {
@@ -121,20 +134,48 @@ final class AccessoryTransport {
     /// - Parameter protocolName: 传输协议名，CarPlay 用 "com.apple.carplay" 之类，待实测确认
     func open(identifier: String, protocolName: String) throws {
         guard let client else { throw TransportError.classMissing("ACCTransportClient") }
-        let selector = NSSelectorFromString(
+        let cls: AnyClass = type(of: client)
+        let createSel = NSSelectorFromString(
             "createEndpointWithTransportType:andProtocol:andIdentifier:"
             + "andDataOutHandler:forConnectionWithUUID:publishConnection:")
-        guard client.responds(to: selector) else { throw TransportError.selectorMissing(NSStringFromSelector(selector)) }
+        guard client.responds(to: createSel) else {
+            throw TransportError.selectorMissing(NSStringFromSelector(createSel))
+        }
+        let connSel = NSSelectorFromString("createConnectionWithType:andIdentifier:")
 
-        // 用 objc_msgSend 直接调用：参数类型必须与 C ABI 完全对齐，所以逐个强转。
+        // 把关键方法的类型编码写进日志：再要调参数就不用靠猜了
+        for (tag, sel) in [("createConnection", connSel), ("createEndpoint", createSel)] {
+            if let method = class_getInstanceMethod(cls, sel),
+               let encoding = method_getTypeEncoding(method) {
+                onLog?("[ACC] \(tag) 编码 \(String(cString: encoding))")
+            }
+        }
+
+        // 1) 先按 API 的本意建连接：forConnectionWithUUID: 要的是它返回的 UUID。
+        //    之前直接塞了个随机 UUID，多半就是 creationFailed 的来源。
+        var connectionUUID: AnyObject?
+        if client.responds(to: connSel), let method = class_getInstanceMethod(cls, connSel) {
+            typealias ConnFunc = @convention(c) (AnyObject, Selector, UInt, AnyObject) -> AnyObject?
+            let fn = unsafeBitCast(method_getImplementation(method), to: ConnFunc.self)
+            for type in 0...3 {
+                let result = fn(client, connSel, UInt(type), identifier as NSString)
+                onLog?("[ACC] createConnection type=\(type) → \(result.map { "\($0)" } ?? "nil")")
+                if let result {
+                    connectionUUID = result
+                    break
+                }
+            }
+        } else {
+            onLog?("[ACC] 没有 createConnectionWithType:andIdentifier:，跳过建连接")
+        }
+
+        // 2) 建端点。有连接就用连接的 UUID，没有就退回随机 UUID 做对照。
         typealias CreateFunc = @convention(c) (AnyObject, Selector, UInt32, AnyObject, AnyObject,
                                                @escaping (AnyObject?) -> Void, AnyObject, Bool) -> AnyObject?
-        let classObject: AnyObject = client
-        guard let method = class_getInstanceMethod(type(of: classObject), selector) else {
-            throw TransportError.selectorMissing(NSStringFromSelector(selector))
+        guard let method = class_getInstanceMethod(cls, createSel) else {
+            throw TransportError.selectorMissing(NSStringFromSelector(createSel))
         }
-        let implementation = method_getImplementation(method)
-        let function = unsafeBitCast(implementation, to: CreateFunc.self)
+        let function = unsafeBitCast(method_getImplementation(method), to: CreateFunc.self)
 
         let handler: (AnyObject?) -> Void = { [weak self] payload in
             guard let self else { return }
@@ -147,11 +188,29 @@ final class AccessoryTransport {
             }
         }
 
-        // transportType：0 = 本机虚拟（CarWithin 的用法），协议名与连接 UUID 按官方换能器的习惯填
-        let created = function(classObject, selector, 0,
-                               protocolName as NSString, identifier as NSString,
-                               handler, NSUUID().uuidString as NSString, true)
-        guard let created else { throw TransportError.creationFailed }
+        let uuid: AnyObject = connectionUUID ?? (NSUUID().uuidString as NSString)
+        if connectionUUID == nil {
+            onLog?("[ACC] 连接建不起来，退回随机 UUID 做对照")
+        }
+
+        var created: AnyObject?
+        for transportType in 0...3 {
+            let candidate = function(client, createSel, UInt32(transportType),
+                                     protocolName as NSString, identifier as NSString,
+                                     handler, uuid, true)
+            let describe = candidate.map { "\(type(of: $0))" } ?? "nil"
+            onLog?("[ACC] createEndpoint transport=\(transportType) → \(describe)")
+            if let candidate {
+                created = candidate
+                break
+            }
+        }
+
+        guard let created else {
+            throw TransportError.creationFailed(connectionUUID == nil
+                ? "连接和端点都建不起来，四种 type 全 nil —— 基本可判定为 entitlement 被拒，自签包拿不到访问配件服务的权限"
+                : "连接建起来了但端点被拒，换 transportType 也没用 —— 剩下的岔路是协议名或端点级 entitlement")
+        }
         endpoint = created as? NSObject
         onLog?("虚拟配件端点已创建：\(created)")
     }
