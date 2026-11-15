@@ -11,6 +11,19 @@ final class CastController: ObservableObject {
     @Published var frames = 0
     @Published var packets = 0
     @Published var pongCount = 0
+    /// M2 第一步：包内 MFi 身份是否可用（签名自检）
+    let identityStatus: String
+
+    init() {
+        do {
+            let identity = try MFiIdentity()
+            identityStatus = identity.selfCheck()
+                ? "MFi 身份可用：私钥对 Apple 证书验签通过"
+                : "身份已加载，但签名自检失败"
+        } catch {
+            identityStatus = "身份加载失败：\(error)"
+        }
+    }
 
     private var encoder: FrameEncoder?
     private var video: UDPSender?
@@ -155,6 +168,10 @@ struct ContentView: View {
                         .keyboardType(.numbersAndPunctuation)
                     Button("开始推送测试图") { controller.start(host: host) }
                     Button("停止", role: .destructive) { controller.stop() }
+                }
+                Section("身份（M2）") {
+                    Text(controller.identityStatus)
+                        .font(.footnote)
                 }
                 Section("状态") {
                     Text(controller.statusText)

@@ -5,12 +5,19 @@ options:
     iOS: "16.4"
   createIntermediateGroups: true
 
+packages:
+  BigInt:
+    url: https://github.com/attaswift/BigInt
+    from: 5.3.0
+
 targets:
   SingleCast:
     type: application
     platform: iOS
     sources:
       - path: Sources
+      - path: Resources
+        buildPhase: resources
     info:
       path: Sources/Info.plist
       properties:
@@ -21,6 +28,8 @@ targets:
         NSLocalNetworkUsageDescription: 用于向九号仪表发送投屏数据（UDP 5012/5013）
         UIBackgroundModes: [audio]
         UILaunchScreen: {}
+    dependencies:
+      - package: BigInt
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.singlecast
